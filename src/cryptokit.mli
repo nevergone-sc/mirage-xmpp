@@ -16,10 +16,11 @@
 (** The Cryptokit library provides a variety of cryptographic primitives
     that can be used to implement cryptographic protocols in
     security-sensitive applications.  The primitives provided include:
-    - Symmetric-key ciphers: AES, DES, Triple-DES, ARCfour,
+    - Symmetric-key ciphers: AES, DES, Triple-DES, ARCfour and Blowfish
       in ECB, CBC, CFB and OFB modes.
     - Public-key cryptography: RSA encryption, Diffie-Hellman key agreement.
-    - Hash functions and MACs: SHA-1, MD5, and MACs based on AES and DES.
+    - Hash functions and MACs: SHA-1, SHA-256, SHA-512, RIPEMD-160,
+      MD5, and MACs based on AES and DES.
     - Random number generation.
     - Encodings and compression: base 64, hexadecimal, Zlib compression.
 
@@ -465,14 +466,15 @@ module Cipher : sig
 end
 
 (** The [Hash] module implements unkeyed cryptographic hashes (SHA-1,
-    SHA-256, RIPEMD-160 and MD5), also known as message digest functions.
-    Hash functions used in cryptography are characterized as being
-    <I>one-way</I> (given a hash value, it is computationally
-    infeasible to find a text that hashes to this value) and
-    <I>collision-resistant</I> (it is computationally infeasible to
-    find two different texts that hash to the same value).  Thus, the
-    hash of a text can be used as a compact replacement for this text
-    for the purposes of ensuring integrity of the text. *)
+    SHA-256, SHA-512, RIPEMD-160 and MD5), also known as message
+    digest functions.  Hash functions used in cryptography are
+    characterized as being <I>one-way</I> (given a hash value, it is
+    computationally infeasible to find a text that hashes to this
+    value) and <I>collision-resistant</I> (it is computationally
+    infeasible to find two different texts that hash to the same
+    value).  Thus, the hash of a text can be used as a compact
+    replacement for this text for the purposes of ensuring integrity
+    of the text. *)
 module Hash : sig
   val sha1: unit -> hash
     (** SHA-1 is the Secure Hash Algorithm revision 1.  It is a NIST
@@ -505,8 +507,8 @@ end
     the text was authentified by someone who possesses the secret key.
 
     The module [MAC] provides two MAC functions based on the hashes
-    SHA-1 and MD5, and four MAC functions based on the block ciphers
-    AES, DES, and Triple-DES. *)
+    SHA-1, SHA-256, SHA-512, RIPEMD-160 and MD5, and four MAC
+    functions based on the block ciphers AES, DES, and Triple-DES. *)
 module MAC: sig
   val hmac_sha1: string -> hash
     (** [hmac_sha1 key] returns a MAC based on the HMAC construction (RFC2104)
@@ -523,7 +525,7 @@ module MAC: sig
     (** [hmac_sha512 key] returns a MAC based on the HMAC construction
         (RFC2104) applied to SHA-512.  The returned hash values are
         512 bits (64 bytes) long.  The [key] argument is the MAC key;
-        it can have any length, but a minimal length of 32 bytes is
+        it can have any length, but a minimal length of 64 bytes is
         recommended. *)
   val hmac_ripemd160: string -> hash
     (** [hmac_ripemd160 key] returns a MAC based on the HMAC
