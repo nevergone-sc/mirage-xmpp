@@ -38,10 +38,7 @@ CAMLprim value caml_sha512_final(value ctx)
   CAMLparam1(ctx);
   CAMLlocal1(res);
 
-  sha512_digest digest;
-
   res = alloc_string(64);
-  sha512_finalize(Context_val(ctx), &digest);
-  sha512_to_bin(&digest, &Byte(res, 0));
+  sha512_finalize(Context_val(ctx), (sha512_digest *) &Byte(res, 0));
   CAMLreturn(res);
 }
