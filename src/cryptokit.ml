@@ -1029,7 +1029,7 @@ module HMAC_SHA1 =
 module HMAC_SHA256 =
   HMAC(struct class h = Hash.sha256  let blocksize = 64 end)
 module HMAC_SHA512 =
-  HMAC(struct class h = Hash.sha512  let blocksize = 64 end)
+  HMAC(struct class h = Hash.sha512  let blocksize = 128 end)
 module HMAC_RIPEMD160 =
   HMAC(struct class h = Hash.ripemd160  let blocksize = 64 end)
 module HMAC_MD5 =
