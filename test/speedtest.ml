@@ -88,8 +88,10 @@ let _ =
     (hash (Hash.sha1()) 1000000 16);
   time_fn "SHA-256, 16_000_000 bytes, 16-byte chunks"
     (hash (Hash.sha256()) 1000000 16);
+  time_fn "SHA-512, 16_000_000 bytes, 16-byte chunks"
+    (hash (Hash.sha512()) 1000000 16);
   time_fn "RIPEMD-160, 16_000_000 bytes, 16-byte chunks"
-    (hash (Hash.sha256()) 1000000 16);
+    (hash (Hash.ripemd160()) 1000000 16);
   time_fn "MD5, 16_000_000 bytes, 16-byte chunks"
     (hash (Hash.md5()) 1000000 16);
   time_fn "AES MAC, 16_000_000 bytes, 16-byte chunks"

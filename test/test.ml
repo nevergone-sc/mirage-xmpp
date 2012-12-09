@@ -257,7 +257,7 @@ let _ =
   test 1 (hash "") (hex "da39a3ee5e6b4b0d3255bfef95601890afd80709");
   test 2 (hash "a") (hex "86f7e437faa5a7fce15d1ddcb9eaeaea377667b8");
   test 3 (hash "abc") (hex "a9993e364706816aba3e25717850c26c9cd0d89d");
-  test 4 (hash "abcdefghijklmnopqrstuvwxyz") 
+  test 4 (hash "abcdefghijklmnopqrstuvwxyz")
          (hex "32d10c7b8cf96570ca04ce37f2a19d84240d3a89");
   test 5 (hash "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
          (hex "84983E441C3BD26EBAAE4AA1F95129E5E54670F1");
@@ -268,12 +268,27 @@ let _ =
 let _ =
   testing_function "SHA-256";
   let hash s = hash_string (Hash.sha256()) s in
-  test 1 (hash "abc")
+  test 1 (hash "")
+    (hex "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  test 2 (hash "abc")
     (hex "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
-  test 2 (hash "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
+  test 3 (hash "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
     (hex "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
-  test 3 (hash (String.make 1000000 'a'))
+  test 4 (hash (String.make 1000000 'a'))
     (hex "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0")
+
+(* SHA-512 *)
+let _ =
+  testing_function "SHA-512";
+  let hash s = hash_string (Hash.sha512()) s in
+  test 1 (hash "")
+    (hex "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e");
+  test 2 (hash "abc")
+    (hex "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
+  test 3 (hash "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
+    (hex "204a8fc6dda82f0a0ced7beb8e08a41657c16ef468b228a8279be331a703c33596fd15c13b1b07f9aa1d3bea57789ca031ad85c7a71dd70354ec631238ca3445");
+  test 4 (hash (String.make 1000000 'a'))
+    (hex "e718483d0ce769644e2e42c7bc15b4638e1f98b13b2044285632a803afa973ebde0ff244877ea60a4cb0432ce577c31beb009c5c2c49aa2e4eadb217ad8cc09b")
 
 (* RIPEMD-160 *)
 let _ =
@@ -457,7 +472,7 @@ let test_same_message testno msg1 msg2 =
 let _ =
   testing_function "RSA";
   (* Signature, no CRT *)
-  test_same_message 1 some_msg 
+  test_same_message 1 some_msg
     (RSA.unwrap_signature some_rsa_key (RSA.sign some_rsa_key some_msg));
   (* Signature, CRT *)
   test_same_message 2 some_msg
@@ -510,7 +525,7 @@ let _ =
 
 let _ =
   testing_function "Base64";
-  test 1 
+  test 1
 "VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZy4KVGhlIHF1aWNr
 IGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZy4KVGhlIHF1aWNrIGJyb3duIGZv
 eCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZy4KVGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBv
@@ -543,7 +558,7 @@ The quick brown fox jumps over the lazy dog.
 The quick brown fox jumps over the lazy dog.
 The quick brown fox jumps over the lazy dog...
 ");
-  test 4 
+  test 4
 "The quick brown fox jumps over the lazy dog.
 The quick brown fox jumps over the lazy dog.
 The quick brown fox jumps over the lazy dog.
@@ -611,9 +626,8 @@ let _ =
   print_newline();
   if !error_occurred then begin
     printf "********* TEST FAILED ***********\n";
-    exit 2 
+    exit 2
   end else begin
     printf "All tests successful.\n";
     exit 0
   end
-
