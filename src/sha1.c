@@ -1,172 +1,268 @@
-/***********************************************************************/
-/*                                                                     */
-/*                      The Cryptokit library                          */
-/*                                                                     */
-/*            Xavier Leroy, projet Cristal, INRIA Rocquencourt         */
-/*                                                                     */
-/*  Copyright 2002 Institut National de Recherche en Informatique et   */
-/*  en Automatique.  All rights reserved.  This file is distributed    */
-/*  under the terms of the GNU Library General Public License, with    */
-/*  the special exception on linking described in file LICENSE.        */
-/*                                                                     */
-/***********************************************************************/
-
-/* $Id: sha1.c 53 2010-08-30 10:53:00Z gildor-admin $ */
-
-/* SHA-1 hashing */
+/*
+ *	Copyright (C) 2006-2009 Vincent Hanquez <tab@snarc.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published
+ * by the Free Software Foundation; version 2.1 or version 3.0 only.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * SHA1 implementation as describe in wikipedia.
+ */
 
 #include <string.h>
-#include <caml/config.h>
+#include <stdio.h>
 #include "sha1.h"
+#include "bitfn.h"
 
-/* Ref: Handbook of Applied Cryptography, section 9.4.2, algorithm 9.53 */
-
-#define rol1(x) (((x) << 1) | ((x) >> 31))
-#define rol5(x) (((x) << 5) | ((x) >> 27))
-#define rol30(x) (((x) << 30) | ((x) >> 2))
-
-static void SHA1_copy_and_swap(void * src, void * dst, int numwords)
+/**
+ * sha1_init - Init SHA1 context
+ */
+void sha1_init(struct sha1_ctx *ctx)
 {
-#ifdef ARCH_BIG_ENDIAN
-  memcpy(dst, src, numwords * sizeof(u32));
-#else
-  unsigned char * s, * d;
-  unsigned char a, b;
-  for (s = src, d = dst; numwords > 0; s += 4, d += 4, numwords--) {
-    a = s[0];
-    b = s[1];
-    d[0] = s[3];
-    d[1] = s[2];
-    d[2] = b;
-    d[3] = a;
-  }
-#endif
+	memset(ctx, 0, sizeof(*ctx));
+
+	/* initialize H */
+	ctx->h[0] = 0x67452301;
+	ctx->h[1] = 0xEFCDAB89;
+	ctx->h[2] = 0x98BADCFE;
+	ctx->h[3] = 0x10325476;
+	ctx->h[4] = 0xC3D2E1F0;
 }
 
-#define F(x,y,z) ( z ^ (x & (y ^ z) ) )
-#define G(x,y,z) ( (x & y) | (z & (x | y) ) )
-#define H(x,y,z) ( x ^ y ^ z )
+#define f1(x, y, z)   (z ^ (x & (y ^ z)))         /* x ? y : z */
+#define f2(x, y, z)   (x ^ y ^ z)                 /* XOR */
+#define f3(x, y, z)   ((x & y) + (z & (x ^ y)))   /* majority */
+#define f4(x, y, z)   f2(x, y, z)
 
-#define Y1 0x5A827999U
-#define Y2 0x6ED9EBA1U
-#define Y3 0x8F1BBCDCU
-#define Y4 0xCA62C1D6U
+#define K1  0x5A827999L                 /* Rounds  0-19: sqrt(2) * 2^30 */
+#define K2  0x6ED9EBA1L                 /* Rounds 20-39: sqrt(3) * 2^30 */
+#define K3  0x8F1BBCDCL                 /* Rounds 40-59: sqrt(5) * 2^30 */
+#define K4  0xCA62C1D6L                 /* Rounds 60-79: sqrt(10) * 2^30 */
 
-static void SHA1_transform(struct SHA1Context * ctx)
+#define R(a, b, c, d, e, f, k, w)  e += rol32(a, 5) + f(b, c, d) + k + w; \
+                                   b = rol32(b, 30)
+
+#define M(i)  (w[i & 0x0f] = rol32(w[i & 0x0f] ^ w[(i - 14) & 0x0f] \
+              ^ w[(i - 8) & 0x0f] ^ w[(i - 3) & 0x0f], 1))
+
+static inline void sha1_do_chunk(unsigned char W[], unsigned int h[])
 {
-  int i;
-  register u32 a, b, c, d, e, t;
-  u32 data[80];
+	unsigned int a, b, c, d, e;
+	unsigned int w[80];
 
-  /* Convert buffer data to 16 big-endian integers */
-  SHA1_copy_and_swap(ctx->buffer, data, 16);
+	#define CPY(i)	w[i] = be32_to_cpu(((unsigned int *) W)[i])
+	CPY(0); CPY(1); CPY(2); CPY(3); CPY(4); CPY(5); CPY(6); CPY(7);
+	CPY(8); CPY(9); CPY(10); CPY(11); CPY(12); CPY(13); CPY(14); CPY(15);
+	#undef CPY
 
-  /* Expand into 80 integers */
-  for (i = 16; i < 80; i++) {
-    t = data[i-3] ^ data[i-8] ^ data[i-14] ^ data[i-16];
-    data[i] = rol1(t);
-  }
+	a = h[0];
+	b = h[1];
+	c = h[2];
+	d = h[3];
+	e = h[4];
 
-  /* Initialize working variables */
-  a = ctx->state[0];
-  b = ctx->state[1];
-  c = ctx->state[2];
-  d = ctx->state[3];
-  e = ctx->state[4];
+	/* following unrolled from:
+	 *	for (i = 0; i < 20; i++) {
+	 *		t = f1(b, c, d) + K1 + rol32(a, 5) + e + M(i);
+	 *		e = d; d = c; c = rol32(b, 30); b = a; a = t;
+	 *	}
+	 */
+	R(a, b, c, d, e, f1, K1, w[0]);
+	R(e, a, b, c, d, f1, K1, w[1]);
+	R(d, e, a, b, c, f1, K1, w[2]);
+	R(c, d, e, a, b, f1, K1, w[3]);
+	R(b, c, d, e, a, f1, K1, w[4]);
+	R(a, b, c, d, e, f1, K1, w[5]);
+	R(e, a, b, c, d, f1, K1, w[6]);
+	R(d, e, a, b, c, f1, K1, w[7]);
+	R(c, d, e, a, b, f1, K1, w[8]);
+	R(b, c, d, e, a, f1, K1, w[9]);
+	R(a, b, c, d, e, f1, K1, w[10]);
+	R(e, a, b, c, d, f1, K1, w[11]);
+	R(d, e, a, b, c, f1, K1, w[12]);
+	R(c, d, e, a, b, f1, K1, w[13]);
+	R(b, c, d, e, a, f1, K1, w[14]);
+	R(a, b, c, d, e, f1, K1, w[15]);
+	R(e, a, b, c, d, f1, K1, M(16));
+	R(d, e, a, b, c, f1, K1, M(17));
+	R(c, d, e, a, b, f1, K1, M(18));
+	R(b, c, d, e, a, f1, K1, M(19));
 
-  /* Perform rounds */
-  for (i = 0; i < 20; i++) {
-    t = F(b, c, d) + Y1 + rol5(a) + e + data[i];
-    e = d; d = c; c = rol30(b); b = a; a = t;
-  }
-  for (/*nothing*/; i < 40; i++) {
-    t = H(b, c, d) + Y2 + rol5(a) + e + data[i];
-    e = d; d = c; c = rol30(b); b = a; a = t;
-  }
-  for (/*nothing*/; i < 60; i++) {
-    t = G(b, c, d) + Y3 + rol5(a) + e + data[i];
-    e = d; d = c; c = rol30(b); b = a; a = t;
-  }
-  for (/*nothing*/; i < 80; i++) {
-    t = H(b, c, d) + Y4 + rol5(a) + e + data[i];
-    e = d; d = c; c = rol30(b); b = a; a = t;
-  }
+	/* following unrolled from:
+	 *	for (i = 20; i < 40; i++) {
+	 *		t = f2(b, c, d) + K2 + rol32(a, 5) + e + M(i);
+	 *		e = d; d = c; c = rol32(b, 30); b = a; a = t;
+	 *	}
+	 */
 
-  /* Update chaining values */
-  ctx->state[0] += a;
-  ctx->state[1] += b;
-  ctx->state[2] += c;
-  ctx->state[3] += d;
-  ctx->state[4] += e;
+	R(a, b, c, d, e, f2, K2, M(20));
+	R(e, a, b, c, d, f2, K2, M(21));
+	R(d, e, a, b, c, f2, K2, M(22));
+	R(c, d, e, a, b, f2, K2, M(23));
+	R(b, c, d, e, a, f2, K2, M(24));
+	R(a, b, c, d, e, f2, K2, M(25));
+	R(e, a, b, c, d, f2, K2, M(26));
+	R(d, e, a, b, c, f2, K2, M(27));
+	R(c, d, e, a, b, f2, K2, M(28));
+	R(b, c, d, e, a, f2, K2, M(29));
+	R(a, b, c, d, e, f2, K2, M(30));
+	R(e, a, b, c, d, f2, K2, M(31));
+	R(d, e, a, b, c, f2, K2, M(32));
+	R(c, d, e, a, b, f2, K2, M(33));
+	R(b, c, d, e, a, f2, K2, M(34));
+	R(a, b, c, d, e, f2, K2, M(35));
+	R(e, a, b, c, d, f2, K2, M(36));
+	R(d, e, a, b, c, f2, K2, M(37));
+	R(c, d, e, a, b, f2, K2, M(38));
+	R(b, c, d, e, a, f2, K2, M(39));
+
+	/* following unrolled from:
+	 *	for (i = 40; i < 60; i++) {
+	 *		t = f3(b, c, d) + K3 + rol32(a, 5) + e + M(i);
+	 *		e = d; d = c; c = rol32(b, 30); b = a; a = t;
+	 *	}
+	 */
+
+	R(a, b, c, d, e, f3, K3, M(40));
+	R(e, a, b, c, d, f3, K3, M(41));
+	R(d, e, a, b, c, f3, K3, M(42));
+	R(c, d, e, a, b, f3, K3, M(43));
+	R(b, c, d, e, a, f3, K3, M(44));
+	R(a, b, c, d, e, f3, K3, M(45));
+	R(e, a, b, c, d, f3, K3, M(46));
+	R(d, e, a, b, c, f3, K3, M(47));
+	R(c, d, e, a, b, f3, K3, M(48));
+	R(b, c, d, e, a, f3, K3, M(49));
+	R(a, b, c, d, e, f3, K3, M(50));
+	R(e, a, b, c, d, f3, K3, M(51));
+	R(d, e, a, b, c, f3, K3, M(52));
+	R(c, d, e, a, b, f3, K3, M(53));
+	R(b, c, d, e, a, f3, K3, M(54));
+	R(a, b, c, d, e, f3, K3, M(55));
+	R(e, a, b, c, d, f3, K3, M(56));
+	R(d, e, a, b, c, f3, K3, M(57));
+	R(c, d, e, a, b, f3, K3, M(58));
+	R(b, c, d, e, a, f3, K3, M(59));
+
+	/* following unrolled from:
+	 *	for (i = 60; i < 80; i++) {
+	 *		t = f2(b, c, d) + K4 + rol32(a, 5) + e + M(i);
+	 *		e = d; d = c; c = rol32(b, 30); b = a; a = t;
+	 *	}
+	 */
+	R(a, b, c, d, e, f4, K4, M(60));
+	R(e, a, b, c, d, f4, K4, M(61));
+	R(d, e, a, b, c, f4, K4, M(62));
+	R(c, d, e, a, b, f4, K4, M(63));
+	R(b, c, d, e, a, f4, K4, M(64));
+	R(a, b, c, d, e, f4, K4, M(65));
+	R(e, a, b, c, d, f4, K4, M(66));
+	R(d, e, a, b, c, f4, K4, M(67));
+	R(c, d, e, a, b, f4, K4, M(68));
+	R(b, c, d, e, a, f4, K4, M(69));
+	R(a, b, c, d, e, f4, K4, M(70));
+	R(e, a, b, c, d, f4, K4, M(71));
+	R(d, e, a, b, c, f4, K4, M(72));
+	R(c, d, e, a, b, f4, K4, M(73));
+	R(b, c, d, e, a, f4, K4, M(74));
+	R(a, b, c, d, e, f4, K4, M(75));
+	R(e, a, b, c, d, f4, K4, M(76));
+	R(d, e, a, b, c, f4, K4, M(77));
+	R(c, d, e, a, b, f4, K4, M(78));
+	R(b, c, d, e, a, f4, K4, M(79));
+
+	h[0] += a;
+	h[1] += b;
+	h[2] += c;
+	h[3] += d;
+	h[4] += e;
 }
 
-void SHA1_init(struct SHA1Context * ctx)
+/**
+ * sha1_update - Update the SHA1 context values with length bytes of data
+ */
+void sha1_update(struct sha1_ctx *ctx, unsigned char *data, int len)
 {
-  ctx->state[0] = 0x67452301U;
-  ctx->state[1] = 0xEFCDAB89U;
-  ctx->state[2] = 0x98BADCFEU;
-  ctx->state[3] = 0x10325476U;
-  ctx->state[4] = 0xC3D2E1F0U;
-  ctx->numbytes = 0;
-  ctx->length[0] = 0;
-  ctx->length[1] = 0;
+	unsigned int index, to_fill;
+
+	index = (unsigned int) (ctx->sz & 0x3f);
+	to_fill = 64 - index;
+
+	ctx->sz += len;
+
+	/* process partial buffer if there's enough data to make a block */
+	if (index && len >= to_fill) {
+		memcpy(ctx->buf + index, data, to_fill);
+		sha1_do_chunk(ctx->buf, ctx->h);
+		len -= to_fill;
+		data += to_fill;
+		index = 0;
+	}
+
+	/* process as much 64-block as possible */
+	for (; len >= 64; len -= 64, data += 64)
+		sha1_do_chunk(data, ctx->h);
+
+	/* append data into buf */
+	if (len)
+		memcpy(ctx->buf + index, data, len);
 }
 
-void SHA1_add_data(struct SHA1Context * ctx, unsigned char * data,
-                   unsigned long len)
+/**
+ * sha1_finalize - Finalize the context and create the SHA1 digest
+ */
+void sha1_finalize(struct sha1_ctx *ctx, sha1_digest *out)
 {
-  u32 t;
+	static unsigned char padding[64] = { 0x80, };
+	unsigned int bits[2];
+	unsigned int index, padlen;
 
-  /* Update length */
-  t = ctx->length[1];
-  if ((ctx->length[1] = t + (u32) (len << 3)) < t)
-    ctx->length[0]++;    /* carry from low 32 bits to high 32 bits */
-  ctx->length[0] += (u32) (len >> 29);
+	/* add padding and update data with it */
+	bits[0] = cpu_to_be32((unsigned int) (ctx->sz >> 29));
+	bits[1] = cpu_to_be32((unsigned int) (ctx->sz << 3));
 
-  /* If data was left in buffer, pad it with fresh data and munge block */
-  if (ctx->numbytes != 0) {
-    t = 64 - ctx->numbytes;
-    if (len < t) {
-      memcpy(ctx->buffer + ctx->numbytes, data, len);
-      ctx->numbytes += len;
-      return;
-    }
-    memcpy(ctx->buffer + ctx->numbytes, data, t);
-    SHA1_transform(ctx);
-    data += t;
-    len -= t;
-  }
-  /* Munge data in 64-byte chunks */
-  while (len >= 64) {
-    memcpy(ctx->buffer, data, 64);
-    SHA1_transform(ctx);
-    data += 64;
-    len -= 64;
-  }
-  /* Save remaining data */
-  memcpy(ctx->buffer, data, len);
-  ctx->numbytes = len;
+	/* pad out to 56 */
+	index = (unsigned int) (ctx->sz & 0x3f);
+	padlen = (index < 56) ? (56 - index) : ((64 + 56) - index);
+	sha1_update(ctx, padding, padlen);
+
+	/* append length */
+	sha1_update(ctx, (unsigned char *) bits, sizeof(bits));
+
+	/* output hash */
+	out->digest[0] = cpu_to_be32(ctx->h[0]);
+	out->digest[1] = cpu_to_be32(ctx->h[1]);
+	out->digest[2] = cpu_to_be32(ctx->h[2]);
+	out->digest[3] = cpu_to_be32(ctx->h[3]);
+	out->digest[4] = cpu_to_be32(ctx->h[4]);
 }
 
-void SHA1_finish(struct SHA1Context * ctx, unsigned char output[20])
+/**
+ * sha1_to_bin - Transform the SHA1 digest into a binary data
+ */
+void sha1_to_bin(sha1_digest *digest, char *out)
 {
-  int i = ctx->numbytes;
+	uint32_t *ptr = (uint32_t *) out;
 
-  /* Set first char of padding to 0x80. There is always room. */
-  ctx->buffer[i++] = 0x80;
-  /* If we do not have room for the length (8 bytes), pad to 64 bytes
-     with zeroes and munge the data block */
-  if (i > 56) {
-    memset(ctx->buffer + i, 0, 64 - i);
-    SHA1_transform(ctx);
-    i = 0;
-  }
-  /* Pad to byte 56 with zeroes */
-  memset(ctx->buffer + i, 0, 56 - i);
-  /* Add length in big-endian */
-  SHA1_copy_and_swap(ctx->length, ctx->buffer + 56, 2);
-  /* Munge the final block */
-  SHA1_transform(ctx);
-  /* Final hash value is in ctx->state modulo big-endian conversion */
-  SHA1_copy_and_swap(ctx->state, output, 5);
+	ptr[0] = digest->digest[0];
+	ptr[1] = digest->digest[1];
+	ptr[2] = digest->digest[2];
+	ptr[3] = digest->digest[3];
+	ptr[4] = digest->digest[4];
+}
+
+/**
+ * sha1_to_hex - Transform the SHA1 digest into a readable data
+ */
+void sha1_to_hex(sha1_digest *digest, char *out)
+{
+
+	#define D(i) (cpu_to_be32(digest->digest[i]))
+	snprintf(out, 41, "%08x%08x%08x%08x%08x",
+		D(0), D(1), D(2), D(3), D(4));
+	#undef D
 }

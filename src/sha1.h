@@ -1,30 +1,33 @@
-/***********************************************************************/
-/*                                                                     */
-/*                      The Cryptokit library                          */
-/*                                                                     */
-/*            Xavier Leroy, projet Cristal, INRIA Rocquencourt         */
-/*                                                                     */
-/*  Copyright 2002 Institut National de Recherche en Informatique et   */
-/*  en Automatique.  All rights reserved.  This file is distributed    */
-/*  under the terms of the GNU Library General Public License, with    */
-/*  the special exception on linking described in file LICENSE.        */
-/*                                                                     */
-/***********************************************************************/
+/*
+ *	Copyright (C) 2006-2009 Vincent Hanquez <tab@snarc.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published
+ * by the Free Software Foundation; version 2.1 or version 3.0 only.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * SHA1 implementation as describe in wikipedia.
+ */
+#ifndef SHA1_H
+#define SHA1_H
 
-/* $Id: sha1.h 53 2010-08-30 10:53:00Z gildor-admin $ */
-
-/* SHA-1 hashing */
-
-typedef unsigned int u32;
-
-struct SHA1Context {
-  u32 state[5];
-  u32 length[2];
-  int numbytes;
-  unsigned char buffer[64];
+struct sha1_ctx
+{
+	unsigned int h[5];
+	unsigned char buf[64];
+	unsigned long long sz;
 };
 
-extern void SHA1_init(struct SHA1Context * ctx);
-extern void SHA1_add_data(struct SHA1Context * ctx, unsigned char * data,
-                          unsigned long len);
-extern void SHA1_finish(struct SHA1Context * ctx, unsigned char output[20]);
+typedef struct { unsigned int digest[5]; } sha1_digest;
+
+void sha1_init(struct sha1_ctx *ctx);
+void sha1_update(struct sha1_ctx *ctx, unsigned char *data, int len);
+void sha1_finalize(struct sha1_ctx *ctx, sha1_digest *out);
+void sha1_to_bin(sha1_digest *digest, char *out);
+void sha1_to_hex(sha1_digest *digest, char *out);
+
+#endif

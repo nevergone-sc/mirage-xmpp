@@ -1,31 +1,33 @@
-/***********************************************************************/
-/*                                                                     */
-/*                      The Cryptokit library                          */
-/*                                                                     */
-/*            Xavier Leroy, projet Cristal, INRIA Rocquencourt         */
-/*                                                                     */
-/*  Copyright 2002 Institut National de Recherche en Informatique et   */
-/*  en Automatique.  All rights reserved.  This file is distributed    */
-/*  under the terms of the GNU Library General Public License, with    */
-/*  the special exception on linking described in file LICENSE.        */
-/*                                                                     */
-/***********************************************************************/
+/*
+ 	Copyright (C) 2006-2009 Vincent Hanquez <tab@snarc.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published
+ * by the Free Software Foundation; version 2.1 or version 3.0 only.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * SHA256 implementation
+ */
+#ifndef SHA256_H
+#define SHA256_H
 
-/* $Id: sha256.h 53 2010-08-30 10:53:00Z gildor-admin $ */
-
-/* SHA-256 hashing */
-
-typedef unsigned int u32;
-
-struct SHA256Context {
-  u32 state[8];
-  u32 length[2];
-  int numbytes;
-  unsigned char buffer[64];
+struct sha256_ctx
+{
+	unsigned int h[8];
+	unsigned char buf[128];
+	unsigned long long sz;
 };
 
-extern void SHA256_init(struct SHA256Context * ctx);
-extern void SHA256_add_data(struct SHA256Context * ctx, unsigned char * data,
-                            unsigned long len);
-extern void SHA256_finish(struct SHA256Context * ctx, 
-                          unsigned char output[32]);
+typedef struct { unsigned int digest[8]; } sha256_digest;
+
+void sha256_init(struct sha256_ctx *ctx);
+void sha256_update(struct sha256_ctx *ctx, unsigned char *data, int len);
+void sha256_finalize(struct sha256_ctx *ctx, sha256_digest *out);
+void sha256_to_bin(sha256_digest *digest, char *out);
+void sha256_to_hex(sha256_digest *digest, char *out);
+
+#endif

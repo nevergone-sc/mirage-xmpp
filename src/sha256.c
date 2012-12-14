@@ -1,204 +1,213 @@
-/***********************************************************************/
-/*                                                                     */
-/*                      The Cryptokit library                          */
-/*                                                                     */
-/*            Xavier Leroy, projet Cristal, INRIA Rocquencourt         */
-/*                                                                     */
-/*  Copyright 2004 Institut National de Recherche en Informatique et   */
-/*  en Automatique.  All rights reserved.  This file is distributed    */
-/*  under the terms of the GNU Library General Public License, with    */
-/*  the special exception on linking described in file LICENSE.        */
-/*                                                                     */
-/***********************************************************************/
-
-/* $Id: sha256.c 53 2010-08-30 10:53:00Z gildor-admin $ */
-
-/* SHA-256 hashing */
+/*
+ *	Copyright (C) 2006-2009 Vincent Hanquez <tab@snarc.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published
+ * by the Free Software Foundation; version 2.1 or version 3.0 only.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * SHA256 implementation
+ */
 
 #include <string.h>
-#include <caml/config.h>
+#include <stdio.h>
+#include "bitfn.h"
 #include "sha256.h"
 
-/* Ref: FIPS publication 180-2 */
 
-#define ROTR(x,n) ((x) >> (n) | (x) << (32 - (n)))
-
-#define CH(x,y,z) (z ^ (x & (y ^ z)))
-#define MAJ(x,y,z) ((x & y) | (z & (x | y)))
-#define SIGMA0(x) (ROTR(x,2) ^ ROTR(x,13) ^ ROTR(x,22))
-#define SIGMA1(x) (ROTR(x,6) ^ ROTR(x,11) ^ ROTR(x,25))
-#define sigma0(x) (ROTR(x,7) ^ ROTR(x,18) ^ (x >> 3))
-#define sigma1(x) (ROTR(x,17) ^ ROTR(x,19) ^ (x >> 10))
-
-static void SHA256_copy_and_swap(void * src, void * dst, int numwords)
+/**
+ * sha256_init - Init SHA256 context
+ */
+void sha256_init(struct sha256_ctx *ctx)
 {
-#ifdef ARCH_BIG_ENDIAN
-  memcpy(dst, src, numwords * sizeof(u32));
-#else
-  unsigned char * s, * d;
-  unsigned char a, b;
-  for (s = src, d = dst; numwords > 0; s += 4, d += 4, numwords--) {
-    a = s[0];
-    b = s[1];
-    d[0] = s[3];
-    d[1] = s[2];
-    d[2] = b;
-    d[3] = a;
-  }
-#endif
+	memset(ctx, 0, sizeof(*ctx));
+
+	ctx->h[0] = 0x6a09e667;
+	ctx->h[1] = 0xbb67ae85;
+	ctx->h[2] = 0x3c6ef372;
+	ctx->h[3] = 0xa54ff53a;
+	ctx->h[4] = 0x510e527f;
+	ctx->h[5] = 0x9b05688c;
+	ctx->h[6] = 0x1f83d9ab;
+	ctx->h[7] = 0x5be0cd19;
 }
 
-static u32 SHA256_constants[64] = {
-  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
-  0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-  0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
-  0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-  0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-  0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
-  0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
-  0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-  0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
-};
+/* 232 times the cube root of the first 64 primes 2..311 */
+static const unsigned int k[] = {
+	0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+	0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+	0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+	0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+	0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+	0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+	0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+	0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+	0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+	0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+	0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2 };
 
-static void SHA256_transform(struct SHA256Context * ctx)
+static inline unsigned int Ch(unsigned int x, unsigned int y, unsigned int z)
 {
-  int i;
-  register u32 a, b, c, d, e, f, g, h, t1, t2;
-  u32 data[80];
-
-  /* Convert buffer data to 16 big-endian integers */
-  SHA256_copy_and_swap(ctx->buffer, data, 16);
-
-  /* Expand into 80 integers */
-  for (i = 16; i < 80; i++) {
-    data[i] = sigma1(data[i-2]) + data[i-7] + sigma0(data[i-15]) + data[i-16];
-  }
-
-  /* Initialize working variables */
-  a = ctx->state[0];
-  b = ctx->state[1];
-  c = ctx->state[2];
-  d = ctx->state[3];
-  e = ctx->state[4];
-  f = ctx->state[5];
-  g = ctx->state[6];
-  h = ctx->state[7];
-
-  /* Perform rounds */
-#if 0
-  for (i = 0; i < 64; i++) {
-    t1 = h + SIGMA1(e) + CH(e, f, g) + SHA256_constants[i] + data[i];
-    t2 = SIGMA0(a) + MAJ(a, b, c);
-    h = g;  g = f;  f = e;  e = d + t1;
-    d = c;  c = b;  b = a;  a = t1 + t2;
-  }
-#else
-#define STEP(a,b,c,d,e,f,g,h,i) \
-    t1 = h + SIGMA1(e) + CH(e, f, g) + SHA256_constants[i] + data[i]; \
-    t2 = SIGMA0(a) + MAJ(a, b, c); \
-    d = d + t1; \
-    h = t1 + t2
-
-  for (i = 0; i < 64; i += 8) {
-    STEP(a,b,c,d,e,f,g,h,i);
-    STEP(h,a,b,c,d,e,f,g,i+1);
-    STEP(g,h,a,b,c,d,e,f,i+2);
-    STEP(f,g,h,a,b,c,d,e,i+3);
-    STEP(e,f,g,h,a,b,c,d,i+4);
-    STEP(d,e,f,g,h,a,b,c,i+5);
-    STEP(c,d,e,f,g,h,a,b,i+6);
-    STEP(b,c,d,e,f,g,h,a,i+7);
-  }
-#endif
-
-  /* Update chaining values */
-  ctx->state[0] += a;
-  ctx->state[1] += b;
-  ctx->state[2] += c;
-  ctx->state[3] += d;
-  ctx->state[4] += e;
-  ctx->state[5] += f;
-  ctx->state[6] += g;
-  ctx->state[7] += h;
+	return z ^ (x & (y ^ z));
 }
 
-void SHA256_init(struct SHA256Context * ctx)
+static inline unsigned int Maj(unsigned int x, unsigned int y, unsigned int z)
 {
-  ctx->state[0] = 0x6A09E667;
-  ctx->state[1] = 0xBB67AE85;
-  ctx->state[2] = 0x3C6EF372;
-  ctx->state[3] = 0xA54FF53A;
-  ctx->state[4] = 0x510E527F;
-  ctx->state[5] = 0x9B05688C;
-  ctx->state[6] = 0x1F83D9AB;
-  ctx->state[7] = 0x5BE0CD19;
-  ctx->numbytes = 0;
-  ctx->length[0] = 0;
-  ctx->length[1] = 0;
+	return (x & y) | (z & (x | y));
 }
 
-void SHA256_add_data(struct SHA256Context * ctx, unsigned char * data,
-                   unsigned long len)
+#define e0(x)       (ror32(x, 2) ^ ror32(x,13) ^ ror32(x,22))
+#define e1(x)       (ror32(x, 6) ^ ror32(x,11) ^ ror32(x,25))
+#define s0(x)       (ror32(x, 7) ^ ror32(x,18) ^ (x >> 3))
+#define s1(x)       (ror32(x,17) ^ ror32(x,19) ^ (x >> 10))
+
+/**
+ * sha256_do_chunk - Process a block through SHA256
+ */
+static void sha256_do_chunk(unsigned char __W[], unsigned int H[])
 {
-  u32 t;
+	unsigned int a, b, c, d, e, f, g, h, t1, t2;
+	unsigned int W[64];
+	int i;
 
-  /* Update length */
-  t = ctx->length[1];
-  if ((ctx->length[1] = t + (u32) (len << 3)) < t)
-    ctx->length[0]++;    /* carry from low 32 bits to high 32 bits */
-  ctx->length[0] += (u32) (len >> 29);
+	for (i = 0; i < 16; i++)
+		W[i] = be32_to_cpu(((unsigned int *) __W)[i]);
 
-  /* If data was left in buffer, pad it with fresh data and munge block */
-  if (ctx->numbytes != 0) {
-    t = 64 - ctx->numbytes;
-    if (len < t) {
-      memcpy(ctx->buffer + ctx->numbytes, data, len);
-      ctx->numbytes += len;
-      return;
-    }
-    memcpy(ctx->buffer + ctx->numbytes, data, t);
-    SHA256_transform(ctx);
-    data += t;
-    len -= t;
-  }
-  /* Munge data in 64-byte chunks */
-  while (len >= 64) {
-    memcpy(ctx->buffer, data, 64);
-    SHA256_transform(ctx);
-    data += 64;
-    len -= 64;
-  }
-  /* Save remaining data */
-  memcpy(ctx->buffer, data, len);
-  ctx->numbytes = len;
+	for (i = 16; i < 64; i++)
+		W[i] = s1(W[i - 2]) + W[i - 7] + s0(W[i - 15]) + W[i - 16];
+
+	a = H[0];
+	b = H[1];
+	c = H[2];
+	d = H[3];
+	e = H[4];
+	f = H[5];
+	g = H[6];
+	h = H[7];
+
+#define T(a, b, c, d, e, f, g, h, k, w)			\
+	do {						\
+		t1 = h + e1(e) + Ch(e, f, g) + k + w;	\
+		t2 = e0(a) + Maj(a, b, c);		\
+		d += t1;				\
+		h = t1 + t2;				\
+	} while (0)
+
+#define PASS(i)							\
+	do {							\
+		T(a, b, c, d, e, f, g, h, k[i + 0], W[i + 0]);	\
+		T(h, a, b, c, d, e, f, g, k[i + 1], W[i + 1]);	\
+		T(g, h, a, b, c, d, e, f, k[i + 2], W[i + 2]);	\
+		T(f, g, h, a, b, c, d, e, k[i + 3], W[i + 3]);	\
+		T(e, f, g, h, a, b, c, d, k[i + 4], W[i + 4]);	\
+		T(d, e, f, g, h, a, b, c, k[i + 5], W[i + 5]);	\
+		T(c, d, e, f, g, h, a, b, k[i + 6], W[i + 6]);	\
+		T(b, c, d, e, f, g, h, a, k[i + 7], W[i + 7]);	\
+	} while (0)
+
+	PASS(0);
+	PASS(8);
+	PASS(16);
+	PASS(24);
+	PASS(32);
+	PASS(40);
+	PASS(48);
+	PASS(56);
+
+#undef T
+#undef PASS
+
+	H[0] += a;
+	H[1] += b;
+	H[2] += c;
+	H[3] += d;
+	H[4] += e;
+	H[5] += f;
+	H[6] += g;
+	H[7] += h;
 }
 
-void SHA256_finish(struct SHA256Context * ctx, unsigned char output[32])
+/**
+ * sha256_update - Update the SHA256 context values with length bytes of data
+ */
+void sha256_update(struct sha256_ctx *ctx, unsigned char *data, int len)
 {
-  int i = ctx->numbytes;
+	unsigned int index, to_fill;
 
-  /* Set first char of padding to 0x80. There is always room. */
-  ctx->buffer[i++] = 0x80;
-  /* If we do not have room for the length (8 bytes), pad to 64 bytes
-     with zeroes and munge the data block */
-  if (i > 56) {
-    memset(ctx->buffer + i, 0, 64 - i);
-    SHA256_transform(ctx);
-    i = 0;
-  }
-  /* Pad to byte 56 with zeroes */
-  memset(ctx->buffer + i, 0, 56 - i);
-  /* Add length in big-endian */
-  SHA256_copy_and_swap(ctx->length, ctx->buffer + 56, 2);
-  /* Munge the final block */
-  SHA256_transform(ctx);
-  /* Final hash value is in ctx->state modulo big-endian conversion */
-  SHA256_copy_and_swap(ctx->state, output, 8);
+	/* check for partial buffer */
+	index = (unsigned int) (ctx->sz & 0x3f);
+	to_fill = 64 - index;
+
+	ctx->sz += len;
+
+	/* process partial buffer if there's enough data to make a block */
+	if (index && len >= to_fill) {
+		memcpy(ctx->buf + index, data, to_fill);
+		sha256_do_chunk(ctx->buf, ctx->h);
+		len -= to_fill;
+		data += to_fill;
+		index = 0;
+	}
+
+	/* process as much 64-block as possible */
+	for (; len >= 64; len -= 64, data += 64)
+		sha256_do_chunk(data, ctx->h);
+
+	/* append data into buf */
+	if (len)
+		memcpy(ctx->buf + index, data, len);
+}
+
+/**
+ * sha256_finalize - Finalize the context and create the SHA256 digest
+ */
+void sha256_finalize(struct sha256_ctx *ctx, sha256_digest *out)
+{
+	static unsigned char padding[64] = { 0x80, };
+	unsigned int bits[2];
+	unsigned int i, index, padlen;
+
+	/* cpu -> big endian */
+	bits[0] = cpu_to_be32((unsigned int) (ctx->sz >> 29));
+	bits[1] = cpu_to_be32((unsigned int) (ctx->sz << 3));
+
+	/* pad out to 56 */
+	index = (unsigned int) (ctx->sz & 0x3f);
+	padlen = (index < 56) ? (56 - index) : ((64 + 56) - index);
+	sha256_update(ctx, padding, padlen);
+
+	/* append length */
+	sha256_update(ctx, (unsigned char *) bits, sizeof(bits));
+
+	/* store to digest */
+	for (i = 0; i < 8; i++)
+		out->digest[i] = cpu_to_be32(ctx->h[i]);
+}
+
+/**
+ * sha256_to_bin - Transform the SHA256 digest into a binary data
+ */
+void sha256_to_bin(sha256_digest *digest, char *out)
+{
+	uint32_t *ptr = (uint32_t *) out;
+	int i;
+
+	for (i = 0; i < 8; i++)
+		ptr[i] = digest->digest[i];
+}
+
+/**
+ * sha256_to_hex - Transform the SHA256 digest into a readable data
+ */
+void sha256_to_hex(sha256_digest *digest, char *out)
+{
+	char *p;
+	int i;
+
+	for (p = out, i = 0; i < 8; i++, p += 8)
+		snprintf(p, 9, "%08x", be32_to_cpu(digest->digest[i]));
 }

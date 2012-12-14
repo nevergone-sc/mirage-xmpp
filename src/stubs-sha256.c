@@ -18,18 +18,18 @@
 #include <caml/memory.h>
 #include <caml/alloc.h>
 
-#define Context_val(v) ((struct SHA256Context *) String_val(v))
+#define Context_val(v) ((struct sha256_ctx *) String_val(v))
 
 CAMLprim value caml_sha256_init(value unit)
 {
-  value ctx = alloc_string(sizeof(struct SHA256Context));
-  SHA256_init(Context_val(ctx));
+  value ctx = alloc_string(sizeof(struct sha256_ctx));
+  sha256_init(Context_val(ctx));
   return ctx;
 }
 
 CAMLprim value caml_sha256_update(value ctx, value src, value ofs, value len)
 {
-  SHA256_add_data(Context_val(ctx), &Byte_u(src, Long_val(ofs)), Long_val(len));
+  sha256_update(Context_val(ctx), &Byte_u(src, Long_val(ofs)), Long_val(len));
   return Val_unit;
 }
 
@@ -39,7 +39,6 @@ CAMLprim value caml_sha256_final(value ctx)
   CAMLlocal1(res);
 
   res = alloc_string(32);
-  SHA256_finish(Context_val(ctx), &Byte_u(res, 0));
+  sha256_finalize(Context_val(ctx), (sha256_digest *) &Byte_u(res, 0));
   CAMLreturn(res);
 }
-

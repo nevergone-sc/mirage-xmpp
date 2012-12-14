@@ -18,18 +18,18 @@
 #include <caml/memory.h>
 #include <caml/alloc.h>
 
-#define Context_val(v) ((struct SHA1Context *) String_val(v))
+#define Context_val(v) ((struct sha1_ctx *) String_val(v))
 
 CAMLprim value caml_sha1_init(value unit)
 {
-  value ctx = alloc_string(sizeof(struct SHA1Context));
-  SHA1_init(Context_val(ctx));
+  value ctx = alloc_string(sizeof(struct sha1_ctx));
+  sha1_init(Context_val(ctx));
   return ctx;
 }
 
 CAMLprim value caml_sha1_update(value ctx, value src, value ofs, value len)
 {
-  SHA1_add_data(Context_val(ctx), &Byte_u(src, Long_val(ofs)), Long_val(len));
+  sha1_update(Context_val(ctx), &Byte_u(src, Long_val(ofs)), Long_val(len));
   return Val_unit;
 }
 
@@ -39,7 +39,6 @@ CAMLprim value caml_sha1_final(value ctx)
   CAMLlocal1(res);
 
   res = alloc_string(20);
-  SHA1_finish(Context_val(ctx), &Byte_u(res, 0));
+  sha1_finalize(Context_val(ctx), (sha1_digest *) &Byte_u(res, 0));
   CAMLreturn(res);
 }
-
