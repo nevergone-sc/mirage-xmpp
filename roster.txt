@@ -1,0 +1,7 @@
+jid =nevergone
+item=b b both Friends Tutor
+item=c c both Family
+jid =b
+item=a a both Friends
+jid =c
+item=a a both Family Friends
