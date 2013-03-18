@@ -12,8 +12,8 @@ let my_entry = Unix.gethostbyname my_name;;
 let my_addr = my_entry.Unix.h_addr_list.(0);;
 let global_info = Hashtbl.create 100;;
 let counter = ref 0;;
-(*Rosterreader.read_file ();;
-let roster = Rosterreader.roster;;*)
+Rosterreader.read_file ();;
+let roster = Rosterreader.roster;;
 class conn_info 
 	?o_init:(o_i=Lwt_io.null) 
 	?r_init:(r_i=[]) 
@@ -35,19 +35,13 @@ class service conn_init =
 		val mutable server_lang = None
 		val mutable server_xmpp_version = "1.0"
 		val mutable stream_id = ""
-		val mutable iq_id = ""
-		val mutable iq_tp = ""
-		val mutable query_ns = ""
-		val s1 = "<stream:stream xmlns:stream=\"http://etherx.jabber.org/streams\" version=\"1.0\" xmlns=\"jabber:client\" to=\"ubuntu\" xml:lang=\"en\" xmlns:xml=\"http://www.w3.org/XML/1998/namespace\">"
-		val s2 = "<?xml version=\"1.0\"?>"
-		val s3 = "<stream:stream to=\"example.com\" xmlns=\"jabber:client\" xmlns:stream=\"http://etherx.jabber.org/streams\" version=\"1.0\">"
-		val s4 = "<message
-        from=\"juliet@example.com\"
-        to=\"romeo@example.net\"
-        xml:lang=\"en\">
-        <body>Art thou not Romeo, and a Montague?</body>
-    </message>"
 		val mutable state = Closed
+		val mutable query_name = ""
+		val mutable query_ns = ""
+		val mutable iq_name = ""
+		val mutable iq_ns = ""
+		val mutable iq_tp =  ""
+		val mutable iq_id = "" 
 		val xml_parser = new event_parser
 
 		(* need to further implementation*)
@@ -99,21 +93,26 @@ class service conn_init =
 						
 			| _    -> ()
 
-		method negot_handler = function
+		method negot_handler = 
+			let content = ref [] in 
+			function
 			| Start_element ((ns, name), att) when xml_parser#level = 1 ->
-				if name = (UTF8.decode "iq") then
-					begin
-					iq_tp <- UTF8.encode (List.assoc ([], UTF8.decode "type") att);
-					iq_id <- UTF8.encode (List.assoc ([], UTF8.decode "id") att)
-					end
-				else ()
+				iq_name <- UTF8.encode name;
+				iq_ns   <- UTF8.encode ns;
+				iq_tp <- begin try 
+						 UTF8.encode (List.assoc ([], UTF8.decode "type") att)
+						 with Not_found -> ""
+						 end;
+				iq_id <- begin try
+						 UTF8.encode (List.assoc ([], UTF8.decode "id") att)
+						 with Not_found -> ""
+						 end
 			| Start_element ((ns, name), att) when xml_parser#level = 2 ->
-				if name = UTF8.decode "query" then 
-					query_ns <- UTF8.encode ns
-				else ()
-			| End_element (ns, name) when xml_parser#level = 2 ->
-				if iq_tp = "get" then
-					if name = UTF8.decode "query" then 
+				query_name <- UTF8.encode name;
+				query_ns <- UTF8.encode ns
+			| End_element (ns, name) when xml_parser#level = 1 ->
+				if name = UTF8.decode "iq" then 
+					if iq_name = "iq" && iq_tp = "get" then
 						if query_ns = "jabber:iq:auth" then
 							this#send ("<iq type='result' id='" ^ iq_id ^ "'>
 							   <query xmlns='jabber:iq:auth'>
@@ -122,9 +121,37 @@ class service conn_init =
 							   <resource/>
 							   </query>
 							   </iq>")
+						else if query_ns = "jabber:iq:roster" then
+							let contacts = Hashtbl.find roster "nevergone" in
+							let str_iq = ref ("<iq to='" ^ client_id ^ "' type='result' id='" ^ iq_id ^ "'>
+												<query xmlns='jabber:iq:roster'>") in
+	      		 			let list_iter (jid, name, subs, groups) =
+		                    	let rec str_groups = function
+		                        	| []   -> ""
+		                        	| g :: gs -> ("<group>" ^ g ^ "</group>" ^ (str_groups gs))
+		                    	in
+		                    	str_iq := (!str_iq ^ "<item jid='" ^ jid ^
+											"' name='" ^ name ^
+											"' subscription='" ^ subs ^ "'>" ^
+											str_groups groups ^ "</item>")
+							in
+		                	    List.iter list_iter !contacts;
+								this#send (!str_iq ^ "</query></iq>");
+								print_string !str_iq
+					else if iq_name = "iq" && iq_tp = "set" then
+						if query_ns = "jabber:iq:auth" then
+							this#send ("<iq type='result' id='" ^ iq_id ^ "'/>") 
 						else ()
-					else ()
+					else () 
 				else ()
+			| End_element (ns, name) when xml_parser#level = 2 ->
+				if name = UTF8.decode "query" then 
+					if iq_name = "iq" && iq_tp = "set" then
+						if query_ns = "jabber:iq:auth" then
+							this#send ("<iq type='result' id='" ^ iq_id ^ "'/>") 
+						else ()
+					else () 
+				else ()	
 			| _ -> ()
 					
 		
