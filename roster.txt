@@ -1,8 +1,8 @@
 jid =nevergone@ubuntu
-item=b b both Friends Tutor
+item=richard@ubuntu Richard both Friends Tutor
 item=c c both Family
 item=d d both Friends
-jid =b
-item=a a both Friends
+jid =richard@ubuntu
+item=nevergone@ubuntu Chen both Friends Tutor
 jid =c
 item=a a both Family Friends

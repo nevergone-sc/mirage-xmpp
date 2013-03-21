@@ -39,11 +39,15 @@ class service conn_init =
 		val mutable server_xmpp_version = "1.0"
 		val mutable stream_id = ""
 		val mutable state = Closed
+		val mutable contacts = []
+		val mutable proceed = false
 		val mutable level1 = (("",""), [])
 		val mutable level2 = (("",""), [])
 		val mutable level3 = (("",""), [])
 		val mutable chardata = []
 		val mutable contents = []
+		val mutable stanza_temp = ""
+		(* val mutable stanza_send = []     used for packed stanza sending mechanism *)
 		val xml_parser = new event_parser
 
 		(* TODO:need further implementation*)
@@ -53,6 +57,9 @@ class service conn_init =
 			let outchan = of_fd output connection in
 			ignore_result (write_line outchan str)
 
+		method send_all strs = 
+			List.iter this#send strs
+
 (* TODO: have different responses *) 
 		method send_err str =  
 			printl str >>= fun () ->
@@ -61,13 +68,30 @@ class service conn_init =
 						</stream:error>
 						</stream:stream>";
 			sleep 5.0 >>= fun () ->
+			counter := !counter - 1;
+			Hashtbl.remove global_info client_id; 
 			Lwt_unix.close connection 
 			
 
 		method send_to id str = 
 			let outchan_to = (Hashtbl.find global_info id)#get_outchan in
 				ignore_result (write_line outchan_to str)
+		
+		method tags_refresh =
+			level1 <- (("",""), []);
+			level2 <- (("",""), []);
+			level3 <- (("",""), []);
+			chardata <- [];
+			contents <- []
 
+		method change_state s = 
+			if proceed then
+				begin
+				this#tags_refresh;
+				state <- s;
+				print_string "state changed!!"
+				end
+			else () (*TODO: need proper response *)
 
 (* TODO: add error handling in each handler!!!!! *)
 		method init_handler = function 
@@ -93,8 +117,6 @@ class service conn_init =
 					with Not_found -> ""
 					end;
 (* TODO: add conditions here!!!!!!*)
-				let conn_inst = new conn_info ~o_init:(of_fd output connection) () in
-					Hashtbl.add global_info client_id conn_inst;
 					this#send "<?xml version=\"1.0\"?>";
 					this#send ("<stream:stream
  						      from='" ^ my_name ^ "'
@@ -114,13 +136,15 @@ class service conn_init =
 		method negot_handler = function
 			| Start_element ((ns, name), att) when xml_parser#level = 1 ->
 				level1 <- ((UTF8.encode ns, UTF8.encode name), att)
+			| End_element _ when xml_parser#level = 1 ->
+				level1 <- (("", ""), []);
+				this#change_state Connected
 			| Start_element ((ns, name), att) when xml_parser#level = 2 ->
 				level2 <- ((UTF8.encode ns, UTF8.encode name), att)
 			| End_element (ns, name) when xml_parser#level = 2 ->
 				let ((_, _), att) = level1 in
 				let ((level2_ns, _), _) = level2 in
-				let level1_tp = try (UTF8.encode (List.assoc ([], UTF8.decode "type") att))
-							 	with Not_found -> ""
+				let level1_tp = try (UTF8.encode (List.assoc ([], UTF8.decode "type") att)) with Not_found -> ""
 				and level1_id = try (UTF8.encode (List.assoc ([], UTF8.decode "id") att))
 							 	with Not_found -> "" (* TODO:should raise exception here*) in
 				if name = UTF8.decode "query" then 
@@ -133,40 +157,88 @@ class service conn_init =
 							   <resource/>
 							   </query>
 							   </iq>")
-						else if level2_ns = "jabber:iq:roster" then
-							let contacts = Hashtbl.find roster client_id in
-							let str_iq = ref ("<iq to='" ^ client_id ^ "' type='result' id='" ^ level1_id ^ "'>
-												<query xmlns='jabber:iq:roster'>") in
-	      		 			let list_iter (jid, name, subs, groups) =
-		                    	let rec str_groups = function
-		                        	| []   -> ""
-		                        	| g :: gs -> ("<group>" ^ g ^ "</group>" ^ (str_groups gs))
-		                    	in
-		                    	str_iq := (!str_iq ^ "<item jid='" ^ jid ^
-											"' name='" ^ name ^
-											"' subscription='" ^ subs ^ "'>" ^
-											str_groups groups ^ "</item>")
-							in
-		                	    List.iter list_iter !contacts;
-								this#send (!str_iq ^ "</query></iq>")
 						else ()
-					else 
+					else if level1_tp = "set" then
 						if level2_ns = "jabber:iq:auth" then
 							(* TODO:consider usage of <digest>, <resource> *)
 							let username = try (UTF8.encode (List.assoc "username" contents))
 							 			   with Not_found -> "" in
+							let conn_inst = new conn_info ~o_init:(of_fd output connection) () in
 								client_id <- (username ^ "@" ^ my_name);
-								this#send ("<iq type='result' id='" ^ level1_id ^ "' to='" ^ client_id ^ "'/>")
+								Hashtbl.add global_info client_id conn_inst;
+								this#send ("<iq type='result' id='" ^ level1_id ^ "' to='" ^ client_id ^ "'/>");
+								proceed <- true;
 						else ()
-				else ()
+					else ()
+				else ();
+				level2 <- (("", ""), []) 
 			| Start_element ((ns, name), att) when xml_parser#level = 3 ->
 				level3 <- ((UTF8.encode ns, UTF8.encode name), att);
 			| End_element (ns, name) when xml_parser#level = 3 ->
 				let ((_, n), _) = level3 in 
-					contents <- (n, chardata) :: contents
-			| CharData s -> chardata <- s
+					contents <- (n, chardata) :: contents;
+					chardata <- []
+			| End_element _ when xml_parser#level > 1 ->
+				chardata <- []
+			| CharData s when xml_parser#level = 4 -> chardata <- s
 			| _ -> ()
 					
+
+		method connect_handler = function
+			| Start_element ((ns, name), att) when xml_parser#level = 1 ->
+				level1 <- ((UTF8.encode ns, UTF8.encode name), att)
+			| Start_element ((ns, name), att) when xml_parser#level = 2 ->
+				level2 <- ((UTF8.encode ns, UTF8.encode name), att)
+			| End_element (ns, name) when xml_parser#level = 1 ->
+				let ((_, _), att) = level1 in
+				let ((level2_ns, _), _) = level2 in
+				let level1_tp = try (UTF8.encode (List.assoc ([], UTF8.decode "type") att)) with Not_found -> ""
+				and level1_id = try (UTF8.encode (List.assoc ([], UTF8.decode "id") att))
+							 	with Not_found -> "" (* TODO:should raise exception here*) in
+					if name = UTF8.decode "iq" then
+						if level1_tp = "get" then
+							if level2_ns = "jabber:iq:roster" then begin
+								print_string client_id;
+								contacts <- !(Hashtbl.find roster client_id);
+								let str_iq = ref ("<iq to='" ^ client_id ^ "' type='result' id='" ^ level1_id ^ "'>
+													<query xmlns='jabber:iq:roster'>") in
+	    	  		 			let list_iter (jid, name, subs, groups) =
+			                    	let rec str_groups = function
+			                        	| []   -> ""
+			                        	| g :: gs -> ("<group>" ^ g ^ "</group>" ^ (str_groups gs))
+			                    	in
+			                    	str_iq := (!str_iq ^ "<item jid='" ^ jid ^
+												"' name='" ^ name ^
+												"' subscription='" ^ subs ^ "'>" ^
+												str_groups groups ^ "</item>")
+								in
+			                	    List.iter list_iter contacts;
+									this#send (!str_iq ^ "</query></iq>");
+								end
+							else ()
+						else ()
+					else if name = UTF8.decode "presence" then
+					(*TODO: send to presence available only *)
+					(*TODO: add to global_info *)
+						begin
+						let broadcast (id, _, subs, _) =
+							if subs = "both" || subs = "from" then
+								this#send_to id ("<presence xmlns='jabber:client' to='" ^ id ^ "' from='"
+												 ^ client_id  ^ "'>" ^ stanza_temp ^ "</presence>");
+						in
+						List.iter broadcast contacts;
+						stanza_temp <- ""
+						end
+			| End_element (ns, name) when xml_parser#level = 2 ->
+				let ((_, level1_name), _) = level1 in
+				let ((level2_ns, level2_name), level2_att) = level2 in
+				if level1_name = "presence" then 
+					stanza_temp <- (stanza_temp ^ xml_parser#raw_string)
+				else ()
+			| CharData s when xml_parser#level = 2 -> 
+				let ((_, level1_name), _) = level1 in
+				if level1_name = "presence" then chardata <- s
+			| _ -> ()
 		
 		method stream_handler str = 
 			try 
@@ -180,7 +252,9 @@ class service conn_init =
 				| Negot ->	xml_parser#change_event_handler this#negot_handler;
 							xml_parser#parse str;
 							return ()
-				| _		->	return ()
+				| Connected ->	xml_parser#change_event_handler this#connect_handler;
+							xml_parser#parse str;
+							return ()
 			with XML.Malformed_XML err_str 
 				|XML.Invalid_XML err_str
 				|XML.Restricted_XML err_str -> this#send_err err_str
