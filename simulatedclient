@@ -1,0 +1,53 @@
+<?xml version="1.0"?>
+<stream:stream xmlns:stream="http://etherx.jabber.org/streams" version="1.0" xmlns="jabber:client" to="ubuntu" xml:lang="en" xmlns:xml="http://www.w3.org/XML/1998/namespace">
+<iq type="get" to="ubuntu" id="auth_1">
+<query xmlns="jabber:iq:auth">
+<username>richard</username>
+</query>
+</iq>
+<iq type="set" to="ubuntu" id="auth_2">
+<query xmlns="jabber:iq:auth">
+<username>richard</username>
+<digest>cf7579954ba3792f6a40044c32f28fb62b10863f</digest>
+<resource>ubuntu</resource>
+</query>
+</iq>
+<iq xmlns="jabber:client" type="get" id="aab6a">
+<query xmlns="jabber:iq:roster"/>
+</iq>
+<presence xmlns="jabber:client">
+<priority>5</priority>
+</presence>
+<iq xmlns="jabber:client" type="get" id="aab8a">
+<query xmlns="jabber:iq:private">
+<storage xmlns="storage:bookmarks"/>
+</query>
+</iq>
+<iq xmlns="jabber:client" type="get" to="richard@ubuntu" id="aab9a">
+<vCard xmlns="vcard-temp" version="2.0" prodid="-//HandGen//NONSGML vGen v1.0//EN"/>
+</iq>
+<iq xmlns="jabber:client" type="get" to="ubuntu" id="aabaa">
+<query xmlns="http://jabber.org/protocol/disco#info"/>
+</iq>
+
+presence template ----------------------------------------------------
+<presence from='rabbit@ubuntu'
+	to='nevergone@ubuntu'
+	type=''>
+</presence>
+
+message template ------------------------------------------------------
+<message
+    from='richard@ubuntu'
+    id='b4vs9'
+    to='nevergone@ubuntu'
+    type='chat'
+    xml:lang='en'>
+<body>hello?</body>
+<body xml:lang='cs'>
+     jsi ty, Romeo?
+   </body>
+<body xml:lang='cs'>
+     Pro&#x010D;e&#x017D; jsi ty, Romeo?
+   </body>
+</message>
