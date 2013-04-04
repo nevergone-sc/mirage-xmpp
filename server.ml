@@ -79,8 +79,10 @@ class service conn_init =
 			
 
 		method send_to id str = 
+			try
 			let outchan_to = (Hashtbl.find global_info id)#get_outchan in
 				ignore_result (write_line outchan_to str)
+			with Not_found -> () (*TODO: implementation*)
 		
 		method tags_refresh =
 			level1 <- (("",""), []);
@@ -94,7 +96,6 @@ class service conn_init =
 				begin
 				this#tags_refresh;
 				state <- s;
-				print_string "state changed!!"
 				end
 			else () (*TODO: need proper response *)
 
@@ -105,7 +106,6 @@ class service conn_init =
 
 		method start_handler = function
 			| Start_element ((ns, name), att)  -> 
-				print_string "here!!";
 				stream_id <- begin try
                 		UTF8.encode (List.assoc ([], [105; 100]) att)
                 	with Not_found -> this#gen_id
@@ -202,10 +202,11 @@ class service conn_init =
 				and level1_id = try (UTF8.encode (List.assoc ([], UTF8.decode "id") att)) with Not_found -> ""
 				and level1_la = try (UTF8.encode (List.assoc xml_lang att)) with Not_found -> ""
 				and level1_to = try (UTF8.encode (List.assoc ([], UTF8.decode "to") att)) with Not_found -> "" in
+					(****** IQ ******)
 					if name = UTF8.decode "iq" then
+						begin
 						if level1_tp = "get" && level2_ns = "jabber:iq:roster" then
 							begin
-							print_string client_id;
 							contacts <- !(Hashtbl.find roster client_id);
 							let str_iq = ref ("<iq to='"^client_id^"' type='result' id='"^level1_id^"'>
 												<query xmlns='jabber:iq:roster'>") in
@@ -220,19 +221,53 @@ class service conn_init =
 		                	    List.iter list_iter contacts;
 								this#send (!str_iq ^ "</query></iq>");
 							end
-						else ()
+						else if level1_tp = "get" && level2_ns = "http://jabber.org/protocol/disco#info" then
+							this#send ("<iq type='error' from='ubuntu' to='"^client_id^"' id='info1'>
+										<query xmlns='http://jabber.org/protocol/disco#info'/>
+										<error type='cancel'>
+										<service-unavailable xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/>
+										</error></iq>")
+						end
+					(****** PRESENCE ******)
 					else if name = UTF8.decode "presence" then
 						(* probe presence *)
 						(*TODO: may not implement server-server interaction *)
 						if level1_tp = "probe" then ()
 						(* initial, subsequent and unavailable presences *)
-						else 
+						else if level1_tp = "unavailable" then begin
+							let broadcast (id, _, subs, _) =
+								(*broadcast to all available contacts*)
+								if (subs = "both" || subs = "from") && (Hashtbl.mem global_info id) then begin
+									this#send_to id ("<presence xmlns='jabber:client' to='" ^ id ^ "' from='"                               				  ^client_id^"' type='"^level1_tp^"'>"^stanza_temp^"</presence>");
+									end
+							in
+								List.iter broadcast contacts;
+								(* send to temporary contacts *)
+								List.iter broadcast contacts_temp;
+								contacts_temp <- [];
+								(* remove from to global_info *)
+								Hashtbl.remove global_info client_id;
+								counter := !counter - 1;
+								ignore_result (Lwt_unix.close connection)
+							end
+						else
 							(*TODO: send to all resources in same account *)
 							if level1_to = "" then
 								begin
 								let broadcast (id, _, subs, _) =
-									if (subs = "both" || subs = "from") && (Hashtbl.mem global_info id) then
+									(*broadcast to all available contacts*)
+									try
+									let conn_inst = Hashtbl.find global_info id in
+									let presence_inst = conn_inst#get_presence in
+									if subs = "both" then begin
+										this#send_to id ("<presence xmlns='jabber:client' to='" ^ id ^ "' from='"                               				  ^client_id^"' type='"^level1_tp^"'>"^stanza_temp^"</presence>");
+										if level1_tp <> "unavailable" then this#send ("<presence xmlns='jabber:client' from='"^id^"'>"^presence_inst^"</presence>");
+										end
+									else if subs = "from" then
 										this#send_to id ("<presence xmlns='jabber:client' to='" ^ id ^ "' from='"                               				  ^client_id^"' type='"^level1_tp^"'>"^stanza_temp^"</presence>")
+									else if subs = "to" then
+										if level1_tp <> "unavailable" then this#send ("<presence xmlns='jabber:client' from='"^id^"'>"^presence_inst^"</presence>");
+									with Not_found -> ()
 								in
 								List.iter broadcast contacts;
 								(* send to temporary contacts *)
@@ -240,10 +275,10 @@ class service conn_init =
 									List.iter broadcast contacts_temp;
 									contacts_temp <- []
 									end;
-								stanza_temp <- "";
 								(* update to global_info *)
 								let conn_inst = Hashtbl.find global_info client_id in
-									conn_inst#change_presence stanza_temp
+									conn_inst#change_presence stanza_temp;
+									stanza_temp <- ""
 								end
 							(* if it is a directed presence *)
 							else
@@ -252,18 +287,16 @@ class service conn_init =
 								stanza_temp <- "";
 								contacts_temp <- (level1_to, "", "", []) :: contacts_temp
 								with Not_found -> () (*TODO: raise error *)
+					(****** MESSAGES ******)
 					else if name = UTF8.decode "message" then
 						if level1_tp = "chat" then begin
-							try this#send_to level1_to ("<message from='" ^ client_id  ^ "' id='" ^ level1_id  ^ 
-														"' to='"^level1_to^"' type='chat' xml:lang='"^level1_la ^
-														"'>" ^ stanza_temp  ^ "</message>")
-							with Not_found -> (); (*TODO: raise exception *)
-							print_string ("<message from='" ^ client_id  ^ "' id='" ^ level1_id  ^ 
+							try begin this#send_to level1_to ("<message from='"^client_id^"' id='"^level1_id ^ 
 														"' to='"^level1_to^"' type='chat' xml:lang='"^level1_la ^
 														"'>" ^ stanza_temp  ^ "</message>");
-							Pervasives.flush Pervasives.stdout;
-							contents <- [];
-							stanza_temp <- ""
+								contents <- [];
+								stanza_temp <- "";
+								end
+							with Not_found -> (); (*TODO: raise exception *)
 							end
 
 			| End_element (ns, name) when xml_parser#level = 2 ->
@@ -324,6 +357,7 @@ let () = bind skt (ADDR_INET (my_addr, 1112));;
 			in
 				counter := !counter + 1;
 				printlf "Client number %d" !counter >>= fun () ->
+				printlf "Hashtable size %d" (Hashtbl.length global_info) >>= fun () ->
 				join [handler; dispatcher ()]
 
 let () = Lwt_main.run (dispatcher ())
