@@ -138,7 +138,6 @@ class service conn_init =
 			| _    -> ()
 
 
-		(*TODO: can it be more generic???????? *)
 		method negot_handler = function
 			| Start_element ((ns, name), att) when xml_parser#level = 1 ->
 				level1 <- ((UTF8.encode ns, UTF8.encode name), att)
@@ -233,7 +232,7 @@ class service conn_init =
 						(* probe presence *)
 						(*TODO: may not implement server-server interaction *)
 						if level1_tp = "probe" then ()
-						(* initial, subsequent and unavailable presences *)
+						(* unavailable presence *)
 						else if level1_tp = "unavailable" then begin
 							let broadcast (id, _, subs, _) =
 								(*broadcast to all available contacts*)
@@ -250,6 +249,7 @@ class service conn_init =
 								counter := !counter - 1;
 								ignore_result (Lwt_unix.close connection)
 							end
+						(* initial, subsequent presences *)
 						else
 							(*TODO: send to all resources in same account *)
 							if level1_to = "" then
@@ -318,6 +318,7 @@ class service conn_init =
 				if level1_name = "presence" then chardata <- s
 			| _ -> ()
 		
+		(* TODO: Dont change handler every time parse *)
 		method stream_handler str = 
 			try 
 				match state with
@@ -343,21 +344,22 @@ class service conn_init =
 
 
 let skt = socket PF_INET SOCK_STREAM 0;;
-let () = bind skt (ADDR_INET (my_addr, 1112));;
-        let rec dispatcher () = 
-			listen skt 4;
-			printl "server thread established" >>= fun () -> 
-			accept skt >>= fun (con, caller_addr) -> 
-			let handler = 
-				printlf "client thread %d established" !counter >>= fun () -> 
-				let inchan = of_fd input con in
-				let stream = Lwt_io.read_lines inchan in
-				let service_inst = new service con in
-					Lwt_stream.iter_s service_inst#stream_handler stream
-			in
-				counter := !counter + 1;
-				printlf "Client number %d" !counter >>= fun () ->
-				printlf "Hashtable size %d" (Hashtbl.length global_info) >>= fun () ->
-				join [handler; dispatcher ()]
+let port = int_of_string Sys.argv.(1) in
+	bind skt (ADDR_INET (my_addr, port));;
+let rec dispatcher () = 
+	listen skt 4;
+	printl "server thread established" >>= fun () -> 
+	accept skt >>= fun (con, caller_addr) -> 
+	let conn_handler = 
+		printlf "client thread %d established" !counter >>= fun () -> 
+		let inchan = of_fd input con in
+		let stream = Lwt_io.read_lines inchan in
+		let service_inst = new service con in
+			Lwt_stream.iter_s service_inst#stream_handler stream
+	in
+		counter := !counter + 1;
+		printlf "Client number %d" !counter >>= fun () ->
+		printlf "Hashtable size %d" (Hashtbl.length global_info) >>= fun () ->
+		join [conn_handler; dispatcher ()]
 
 let () = Lwt_main.run (dispatcher ())
