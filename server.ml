@@ -50,7 +50,7 @@ class service conn_init =
 		val mutable level2 = (("",""), [])
 		val mutable level3 = (("",""), [])
 		val mutable chardata = []
-		val mutable contents = []
+		val mutable contents = [] (* list of ((namespace, name),(attribute list, data)) *)
 		val mutable stanza_temp = ""
 		(* val mutable stanza_send = []     used for packed stanza sending mechanism *)
 		val xml_parser = new event_parser
@@ -149,7 +149,8 @@ class service conn_init =
 			| End_element (ns, name) when xml_parser#level = 2 ->
 				let ((_, _), att) = level1 in
 				let ((level2_ns, _), _) = level2 in
-				let level1_tp = try (UTF8.encode (List.assoc ([], UTF8.decode "type") att)) with Not_found -> ""
+				let level1_tp = try (UTF8.encode (List.assoc ([], UTF8.decode "type") att)) 
+								with Not_found -> ""
 				and level1_id = try (UTF8.encode (List.assoc ([], UTF8.decode "id") att))
 							 	with Not_found -> "" (* TODO:should raise exception here*) in
 				if name = UTF8.decode "query" then 
@@ -167,7 +168,7 @@ class service conn_init =
 						if level2_ns = "jabber:iq:auth" then
 							(* TODO:consider usage of <digest>, <resource> *)
 							let username = try (UTF8.encode (snd (List.assoc ("", "username") contents)))
-							 			   with Not_found -> "" in
+							 			   with Not_found -> "" (*TODO:not permitted*)in
 							let conn_inst = new conn_info ~o_init:(of_fd output connection) () in
 								client_id <- (username ^ "@" ^ my_name);
 								Hashtbl.add global_info client_id conn_inst;
@@ -206,7 +207,9 @@ class service conn_init =
 						begin
 						if level1_tp = "get" && level2_ns = "jabber:iq:roster" then
 							begin
-							contacts <- !(Hashtbl.find roster client_id);
+							contacts <- begin try !(Hashtbl.find roster client_id)
+										with Not_found -> [] (*TODO: create a new roster entry*)
+										end;
 							let str_iq = ref ("<iq to='"^client_id^"' type='result' id='"^level1_id^"'>
 												<query xmlns='jabber:iq:roster'>") in
 	      		 			let list_iter (jid, name, subs, groups) =

@@ -8,6 +8,7 @@ type state = Closed | Start | Negot | Connected
 class handler init_ic init_oc =
     object(this)
 		val xml_lang = (UTF8.decode "http://www.w3.org/XML/1998/namespace", [108; 97; 110; 103])
+		val username = "android"
 		val client_id = "android@ubuntu"
 		val inchan = init_ic
 		val outchan = init_oc
@@ -18,6 +19,13 @@ class handler init_ic init_oc =
 		val mutable server_id = ""
 		val xml_parser = new event_parser
 
+		val mutable level1 = (("",""), [])
+        val mutable level2 = (("",""), [])
+        val mutable level3 = (("",""), [])
+		val mutable stanza_temp = "" 
+		val mutable chardata = []
+		val mutable contents = []
+
 		method send str =
             ignore_result (write_line outchan str)
 
@@ -25,83 +33,123 @@ class handler init_ic init_oc =
 		method send_err str = 
 			printl str
 
+		method tags_refresh =
+            level1 <- (("",""), []);
+            level2 <- (("",""), []);
+            level3 <- (("",""), []);
+            chardata <- [];
+            contents <- []
+
 		method init_handler = function
             | Start_document -> state <- Start
             | _              -> ()
 
 		method start_handler = function
             | Start_element ((ns, name), att)  ->
-                stream_id <- begin try
-                        UTF8.encode (List.assoc ([], [105; 100]) att)
-                    with Not_found -> ""
-                    end;
-                server_lang <- begin try
-                        Some (UTF8.encode (List.assoc xml_lang att))
-                    with Not_found -> None
-                    end;
-                server_xmpp_version <- begin try
-                       UTF8.encode (List.assoc ([], UTF8.decode "version") att)
-                    with Not_found -> "0.9"
-                    end;
-                server_id <- begin try
+				if name = UTF8.decode "stream" then begin
+ 	               stream_id <- begin try
+   						UTF8.encode (List.assoc ([], [105; 100]) att)
+        	            with Not_found -> ""
+            	        end;
+					server_lang <- begin try
+       					Some (UTF8.encode (List.assoc xml_lang att))
+            	        with Not_found -> None
+						end;
+					server_xmpp_version <- begin try
+						UTF8.encode (List.assoc ([], UTF8.decode "version") att)
+                    	with Not_found -> "0.9"
+                    	end;
+                	server_id <- begin try
                         UTF8.encode (List.assoc ([], [102; 114; 111; 109]) att)
-                    with Not_found -> ""
-                    end;
+                    	with Not_found -> ""
+                    	end;
+					end
 (* TODO: add conditions here!!!!!!*)
-                    state <- Negot;
-					print_string "negot"
-				| _    -> ()
-(*
+
+            | End_element (ns, name) when xml_parser#level = 1 ->
+				if name = UTF8.decode "features" then begin
+					this#send ("<iq type='get' to='"^server_id^"' id='auth_1'>
+						<query xmlns='jabber:iq:auth'>
+						<username>"^username^"</username>
+						</query></iq>");
+					state <- Negot
+					end
+			| _    -> ()
+
+
 		method negot_handler = function
             | Start_element ((ns, name), att) when xml_parser#level = 1 ->
                 level1 <- ((UTF8.encode ns, UTF8.encode name), att)
-            | End_element _ when xml_parser#level = 1 ->
-                level1 <- (("", ""), []);
-                this#change_state Connected
             | Start_element ((ns, name), att) when xml_parser#level = 2 ->
                 level2 <- ((UTF8.encode ns, UTF8.encode name), att)
-            | End_element (ns, name) when xml_parser#level = 2 ->
+            | End_element (ns, name) when xml_parser#level = 1 ->
+                let ((_, _), att) = level1 in
+                let ((level2_ns, level2_name), _) = level2 in
+                let level1_tp = try (UTF8.encode (List.assoc ([], UTF8.decode "type") att)) 
+								with Not_found -> ""
+                and level1_id = try (UTF8.encode (List.assoc ([], UTF8.decode "id") att))
+                                with Not_found -> "" (* TODO:should raise exception here*) in
+                if name = UTF8.decode "iq" then
+                    if level1_tp = "result" then
+                        if level2_name = "query" && level2_ns = "jabber:iq:auth" then
+							begin
+               	            this#send ("<iq type='set' id='auth_2'>
+							   	<query xmlns='jabber:iq:auth'>
+								"^stanza_temp^"
+                       	   	   	</query></iq>");
+							stanza_temp <- "";
+							level3 <- (("", ""), [])
+							end
+                        else if level2 = (("", ""), []) && level3 = (("", ""), []) then begin
+							print_string "here!!!";
+							state <- Connected;
+							(*roster query, could be omitted*)
+							this#send "<iq xmlns='jabber:client' type='get' id='aad1a'>
+									   <query xmlns='jabber:iq:roster'/></iq>";
+							this#send "<presence xmlns='jabber:client'>
+									   <priority>5</priority>
+									   <c xmlns='http://jabber.org/protocol/caps' node='http://psi-dev.googlecode.com/caps' ver='0.15' ext='ep-notify-2 html sxe whiteboard'/>
+									   </presence>"
+							end
+                    else ()
+                else ();
+				this#tags_refresh
+(*
+			| End_element (ns, name) when xml_parser#level = 2 ->
                 let ((_, _), att) = level1 in
                 let ((level2_ns, _), _) = level2 in
-                let level1_tp = try (UTF8.encode (List.assoc ([], UTF8.decode "type") att)) with Not_found -> ""
+                let level1_tp = try (UTF8.encode (List.assoc ([], UTF8.decode "type") att)) 
+								with Not_found -> ""
                 and level1_id = try (UTF8.encode (List.assoc ([], UTF8.decode "id") att))
                                 with Not_found -> "" (* TODO:should raise exception here*) in
                 if name = UTF8.decode "query" then
-                    if level1_tp = "get" then
+                    if level1_tp = "result" then
                         if level2_ns = "jabber:iq:auth" then
-                            this#send ("<iq type='result' id='" ^ level1_id ^ "'>
-							   <query xmlns='jabber:iq:auth'>
-                               <username/>
-                               <digest/>
-                               <resource/>
-                               </query>
-                               </iq>")
+							if level3 = (("", ""), []) then
+                                state <- Connected
+                            else
+                                begin
+                                this#send ("<iq type='set' id='auth_2'>
+                                    <query xmlns='jabber:iq:auth'>
+                                    "^stanza_temp^"
+                                    </query></iq>");
+                                stanza_temp <- "";
+                                end
                         else ()
-                    else if level1_tp = "set" then
-                        if level2_ns = "jabber:iq:auth" then
-                            (* TODO:consider usage of <digest>, <resource> *)
-                            let username = try (UTF8.encode (snd (List.assoc ("", "username") contents)))
-                                           with Not_found -> "" in
-                            let conn_inst = new conn_info ~o_init:(of_fd output connection) () in
-                                client_id <- (username ^ "@" ^ my_name);
-                                Hashtbl.add global_info client_id conn_inst;
-                                this#send ("<iq type='result' id='" ^ level1_id ^ "' to='" ^ client_id ^ "'/>");
-                                proceed <- true;
-                        else ()
-                    else ()
-                else ();
-                level2 <- (("", ""), [])
-            | Start_element ((ns, name), att) when xml_parser#level = 3 ->
-                level3 <- ((UTF8.encode ns, UTF8.encode name), att);
-            | End_element (ns, name) when xml_parser#level = 3 ->
-                let ((_, n), _) = level3 in
-                    contents <- (("", n), ([],chardata)) :: contents;
-                    chardata <- []
-			| End_element _ when xml_parser#level > 1 ->
-                chardata <- []
-            | CharData s when xml_parser#level = 4 -> chardata <- s
-            | _ -> ()
 *)
+            | Start_element ((ns, name), att) when xml_parser#level = 3 ->
+				let name_str = UTF8.encode name in 
+                level3 <- ((UTF8.encode ns, name_str), att);
+				if name_str = "username" then
+					stanza_temp <- stanza_temp^"<username>"^username^"</username>\n"
+				else if name_str = "digest" then
+					stanza_temp <- stanza_temp^"<digest>676465d91aad816c4bdd02e1441eaa303aeb6b0e</digest>\n"
+				else if name_str = "resource" then
+					stanza_temp <- stanza_temp^"<resource>ubuntu</resource>\n"
+            | _ -> ()
+
+		method connect_handler = function
+			| _ -> ()
 
 		method stream_handler str =
             try
@@ -112,16 +160,12 @@ class handler init_ic init_oc =
                 | Start ->  xml_parser#change_event_handler this#start_handler;
                             xml_parser#parse str;
                             return ()
-				| Negot -> xml_parser#parse str;
+				| Negot ->  xml_parser#change_event_handler this#negot_handler;
+							xml_parser#parse str;
 							return ()
-(*
-                | Negot ->  xml_parser#change_event_handler this#negot_handler;
-                            xml_parser#parse str;
-                            return ()
                 | Connected ->  xml_parser#change_event_handler this#connect_handler;
                             xml_parser#parse str;
                             return ()
-*)
             with XML.Malformed_XML err_str
                 |XML.Invalid_XML err_str
                 |XML.Restricted_XML err_str -> this#send_err err_str
