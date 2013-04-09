@@ -67,13 +67,11 @@ class handler init_ic init_oc =
 (* TODO: add conditions here!!!!!!*)
 
             | End_element (ns, name) when xml_parser#level = 1 ->
-				if name = UTF8.decode "features" then begin
-					this#send ("<iq type='get' to='"^server_id^"' id='auth_1'>
-						<query xmlns='jabber:iq:auth'>
-						<username>"^username^"</username>
-						</query></iq>");
-					state <- Negot
-					end
+				this#send ("<iq type='get' to='"^server_id^"' id='auth_1'>
+							<query xmlns='jabber:iq:auth'>
+							<username>"^username^"</username>
+							</query></iq>");
+				state <- Negot
 			| _    -> ()
 
 
@@ -101,7 +99,6 @@ class handler init_ic init_oc =
 							level3 <- (("", ""), [])
 							end
                         else if level2 = (("", ""), []) && level3 = (("", ""), []) then begin
-							print_string "here!!!";
 							state <- Connected;
 							(*roster query, could be omitted*)
 							this#send "<iq xmlns='jabber:client' type='get' id='aad1a'>
@@ -179,7 +176,7 @@ let client_thread =
 	let sktaddr = ADDR_INET (server_addr, port) in
 		Lwt_io.open_connection sktaddr >>= fun (ic, oc) ->
 		write_line oc ("<?xml version=\"1.0\"?>") >>= fun () ->
-		write_line oc ("<stream:stream xmlns:stream=\"http://etherx.jabber.org/streams\" version=\"1.0\" xmlns=\"jabber:client\" to=\""^ Sys.argv.(1)  ^"\" xml:lang=\"en\" xmlns:xml=\"http://www.w3.org/XML/1998/namespace\">") >>= fun () ->
+		write_line oc ("<stream:stream xmlns:stream=\"http://etherx.jabber.org/streams\" version=\"0.9\" xmlns=\"jabber:client\" to=\"ubuntu\" xml:lang=\"en\" xmlns:xml=\"http://www.w3.org/XML/1998/namespace\">") >>= fun () ->
 		let receive_thread = 
 			let stream = Lwt_io.read_lines ic in
 			let handler_inst = new handler ic oc in

@@ -132,6 +132,7 @@ class service conn_init =
  						      xmlns='jabber:client'
  						      xmlns:stream='http://etherx.jabber.org/streams'>");
 					this#send "<stream:features>
+							   <starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>
 						       </stream:features>";
 					state <- Negot
 						
