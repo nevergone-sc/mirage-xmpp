@@ -3,13 +3,16 @@ open Lwt_io
 open Lwt_unix
 open XML
 open Unicode
+open Cryptokit
+
+let password = "123";;
 
 type state = Closed | Start | Negot | Connected
 class handler init_ic init_oc =
     object(this)
 		val xml_lang = (UTF8.decode "http://www.w3.org/XML/1998/namespace", [108; 97; 110; 103])
-		val username = "android"
-		val client_id = "android@ubuntu"
+		val username = "nevergone"
+		val client_id = "nevergone@ubuntu"
 		val inchan = init_ic
 		val outchan = init_oc
 		val mutable state = Closed
@@ -27,11 +30,12 @@ class handler init_ic init_oc =
 		val mutable contents = []
 
 		method send str =
+			print_string str;
             ignore_result (write_line outchan str)
 
 		(* TODO:need implememtation *)
 		method send_err str = 
-			printl str
+			print_string str
 
 		method tags_refresh =
             level1 <- (("",""), []);
@@ -48,7 +52,7 @@ class handler init_ic init_oc =
             | Start_element ((ns, name), att)  ->
 				if name = UTF8.decode "stream" then begin
  	               stream_id <- begin try
-   						UTF8.encode (List.assoc ([], [105; 100]) att)
+   						UTF8.encode (List.assoc ([], UTF8.decode "id") att)
         	            with Not_found -> ""
             	        end;
 					server_lang <- begin try
@@ -60,18 +64,17 @@ class handler init_ic init_oc =
                     	with Not_found -> "0.9"
                     	end;
                 	server_id <- begin try
-                        UTF8.encode (List.assoc ([], [102; 114; 111; 109]) att)
+                        UTF8.encode (List.assoc ([], UTF8.decode "from") att)
                     	with Not_found -> ""
                     	end;
-					end
 (* TODO: add conditions here!!!!!!*)
-
-            | End_element (ns, name) when xml_parser#level = 1 ->
-				this#send ("<iq type='get' to='"^server_id^"' id='auth_1'>
-							<query xmlns='jabber:iq:auth'>
-							<username>"^username^"</username>
-							</query></iq>");
-				state <- Negot
+				if stream_id <> "" then
+					this#send ("<iq type='get' to='"^server_id^"' id='auth_1'>
+								<query xmlns='jabber:iq:auth'>
+								<username>"^username^"</username>
+								</query></iq>");
+					state <- Negot
+				end
 			| _    -> ()
 
 
@@ -100,7 +103,7 @@ class handler init_ic init_oc =
 							end
                         else if level2 = (("", ""), []) && level3 = (("", ""), []) then begin
 							state <- Connected;
-							(*roster query, could be omitted*)
+							(*roster query, not important*)
 							this#send "<iq xmlns='jabber:client' type='get' id='aad1a'>
 									   <query xmlns='jabber:iq:roster'/></iq>";
 							this#send "<presence xmlns='jabber:client'>
@@ -139,10 +142,14 @@ class handler init_ic init_oc =
                 level3 <- ((UTF8.encode ns, name_str), att);
 				if name_str = "username" then
 					stanza_temp <- stanza_temp^"<username>"^username^"</username>\n"
-				else if name_str = "digest" then
-					stanza_temp <- stanza_temp^"<digest>676465d91aad816c4bdd02e1441eaa303aeb6b0e</digest>\n"
 				else if name_str = "resource" then
 					stanza_temp <- stanza_temp^"<resource>ubuntu</resource>\n"
+				else if name_str = "digest" then begin
+					let sha1 = Hash.sha1 () in
+					let hex = Hexa.encode () in
+					let str = transform_string hex (hash_string sha1 (stream_id ^ password)) in
+					stanza_temp <- stanza_temp^"<digest>" ^ str  ^ "</digest>\n"
+					end
             | _ -> ()
 
 		method connect_handler = function
@@ -153,16 +160,12 @@ class handler init_ic init_oc =
                 match state with
                 | Closed -> xml_parser#change_event_handler this#init_handler;
                             xml_parser#parse str;
-                            return ()
                 | Start ->  xml_parser#change_event_handler this#start_handler;
                             xml_parser#parse str;
-                            return ()
 				| Negot ->  xml_parser#change_event_handler this#negot_handler;
 							xml_parser#parse str;
-							return ()
                 | Connected ->  xml_parser#change_event_handler this#connect_handler;
                             xml_parser#parse str;
-                            return ()
             with XML.Malformed_XML err_str
                 |XML.Invalid_XML err_str
                 |XML.Restricted_XML err_str -> this#send_err err_str
@@ -175,17 +178,34 @@ let client_thread =
 	let port = int_of_string Sys.argv.(2) in
 	let sktaddr = ADDR_INET (server_addr, port) in
 		Lwt_io.open_connection sktaddr >>= fun (ic, oc) ->
-		write_line oc ("<?xml version=\"1.0\"?>") >>= fun () ->
-		write_line oc ("<stream:stream xmlns:stream=\"http://etherx.jabber.org/streams\" version=\"0.9\" xmlns=\"jabber:client\" to=\"ubuntu\" xml:lang=\"en\" xmlns:xml=\"http://www.w3.org/XML/1998/namespace\">") >>= fun () ->
-		let receive_thread = 
-			let stream = Lwt_io.read_lines ic in
+(*
+		let rec receive_thread () =
+			read_line ic >>= fun input ->
+			printl input >>= fun () ->
+			flush Lwt_io.stdout >>= fun () ->
+			join [receive_thread ()] in
+*)
+		let rec receive_thread () = 
+			let temp_str = ref "" in
+			write_line oc ("<?xml version='1.0'?>") >>= fun () ->
+			write_line oc ("<stream:stream xmlns:stream='http://etherx.jabber.org/streams' version='0.9' xmlns='jabber:client' to='ubuntu' xml:lang='en' xmlns:xml='http://www.w3.org/XML/1998/namespace'>") >>= fun () ->
 			let handler_inst = new handler ic oc in
-        	    Lwt_stream.iter_s handler_inst#stream_handler stream in
+			let stream = Lwt_io.read_chars ic in
+			let char_handler c = 
+				temp_str := !temp_str ^ (String.make 1 c);
+				if c = '>' then begin
+					handler_inst#stream_handler !temp_str;
+					temp_str := ""
+					end;
+				return ()
+			in
+				Lwt_stream.iter_s char_handler stream
+		in
 		let rec send_thread () = 
 			read_line Lwt_io.stdin >>= fun input ->
-			write_line oc input >>= fun () ->
+			Lwt_io.write_line oc input >>= fun () ->
 			join [send_thread ()]
 		in
-			join [receive_thread; send_thread ()]
+			join [receive_thread (); send_thread ()]
 
 let () = Lwt_main.run (client_thread)

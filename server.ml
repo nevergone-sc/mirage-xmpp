@@ -67,6 +67,7 @@ class service conn_init =
 
 (* TODO: have different responses *) 
 		method send_err str =  
+			ignore_result (
 			printl str >>= fun () ->
 			this#send "<stream:error>
 						<host-unknown xmlns='urn:ietf:params:xml:ns:xmpp-streams'/>
@@ -75,7 +76,8 @@ class service conn_init =
 			sleep 5.0 >>= fun () ->
 			counter := !counter - 1;
 			Hashtbl.remove global_info client_id; 
-			Lwt_unix.close connection 
+			Lwt_unix.close connection
+			)
 			
 
 		method send_to id str = 
@@ -106,6 +108,7 @@ class service conn_init =
 
 		method start_handler = function
 			| Start_element ((ns, name), att)  -> 
+				(*TODO delete, not suppose to have stream id from client*)
 				stream_id <- begin try
                 		UTF8.encode (List.assoc ([], [105; 100]) att)
                 	with Not_found -> this#gen_id
@@ -114,10 +117,7 @@ class service conn_init =
                         Some (UTF8.encode (List.assoc xml_lang att))
                     with Not_found -> None
                     end;
-                server_xmpp_version <- begin try
-                       UTF8.encode (List.assoc ([], UTF8.decode "version") att)
-                    with Not_found -> "0.9"
-                    end;
+                server_xmpp_version <- "0.9"; 
 				client_id <- begin try
                 		UTF8.encode (List.assoc ([], [102; 114; 111; 109]) att)
 					with Not_found -> ""
@@ -127,13 +127,10 @@ class service conn_init =
 					this#send ("<stream:stream
  						      from='" ^ my_name ^ "'
 							  id='" ^ stream_id ^ "'
- 						      version='1.0'
+ 						      versiervon='" ^ server_xmpp_version ^ "'
  						      xml:lang='en'
  						      xmlns='jabber:client'
  						      xmlns:stream='http://etherx.jabber.org/streams'>");
-					this#send "<stream:features>
-							   <starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>
-						       </stream:features>";
 					state <- Negot
 						
 			| _    -> ()
@@ -328,16 +325,12 @@ class service conn_init =
 				match state with
 				| Closed -> xml_parser#change_event_handler this#init_handler;
 							xml_parser#parse str;
-							return ()
 				| Start -> 	xml_parser#change_event_handler this#start_handler;
 							xml_parser#parse str;
-							return ()
 				| Negot ->	xml_parser#change_event_handler this#negot_handler;
 							xml_parser#parse str;
-							return ()
 				| Connected ->	xml_parser#change_event_handler this#connect_handler;
 							xml_parser#parse str;
-							return ()
 			with XML.Malformed_XML err_str 
 				|XML.Invalid_XML err_str
 				|XML.Restricted_XML err_str -> this#send_err err_str
@@ -355,11 +348,20 @@ let rec dispatcher () =
 	printl "server thread established" >>= fun () -> 
 	accept skt >>= fun (con, caller_addr) -> 
 	let conn_handler = 
+		let temp_str = ref "" in
 		printlf "client thread %d established" !counter >>= fun () -> 
 		let inchan = of_fd input con in
-		let stream = Lwt_io.read_lines inchan in
+		let stream = Lwt_io.read_chars inchan in
 		let service_inst = new service con in
-			Lwt_stream.iter_s service_inst#stream_handler stream
+		let char_handler c =  
+            temp_str := !temp_str ^ (String.make 1 c);
+            if c = '>' then begin
+                service_inst#stream_handler !temp_str;
+                temp_str := ""
+                end;
+            return ()
+        in
+            Lwt_stream.iter_s char_handler stream
 	in
 		counter := !counter + 1;
 		printlf "Client number %d" !counter >>= fun () ->
