@@ -42,10 +42,14 @@ class service conn_init =
 		val mutable server_lang = None
 		val mutable server_xmpp_version = "1.0"
 		val mutable stream_id = ""
+		val mutable username = ""
+		val mutable password = ""
+		val mutable resource = ""
 		val mutable state = Closed
 		val mutable contacts = []
 		val mutable contacts_temp = []
 		val mutable proceed = false
+		val mutable has_data = false
 		val mutable level1 = (("",""), [])
 		val mutable level2 = (("",""), [])
 		val mutable level3 = (("",""), [])
@@ -54,6 +58,8 @@ class service conn_init =
 		val mutable stanza_temp = ""
 		(* val mutable stanza_send = []     used for packed stanza sending mechanism *)
 		val xml_parser = new event_parser
+
+
 
 		(* TODO:need further implementation*)
 		method gen_id = string_of_int !counter
@@ -96,23 +102,25 @@ class service conn_init =
 		method change_state s = 
 			if proceed then
 				begin
+				proceed <- false;
 				this#tags_refresh;
 				state <- s;
+				match s with
+				| Closed -> xml_parser#change_event_handler this#init_handler
+				| Start -> xml_parser#change_event_handler this#start_handler
+				| Negot  -> xml_parser#change_event_handler this#negot_handler
+				| Connected -> xml_parser#change_event_handler this#connect_handler
 				end
-			else () (*TODO: need proper response *)
 
 (* TODO: add error handling in each handler!!!!! *)
 		method init_handler = function 
-			| Start_document -> state <- Start
+			| Start_document -> proceed <- true;
+								this#change_state Start
 			| _				 -> ()
 
 		method start_handler = function
 			| Start_element ((ns, name), att)  -> 
-				(*TODO delete, not suppose to have stream id from client*)
-				stream_id <- begin try
-                		UTF8.encode (List.assoc ([], [105; 100]) att)
-                	with Not_found -> this#gen_id
-                	end;
+				stream_id <- this#gen_id;
                 server_lang <- begin try
                         Some (UTF8.encode (List.assoc xml_lang att))
                     with Not_found -> None
@@ -131,7 +139,8 @@ class service conn_init =
  						      xml:lang='en'
  						      xmlns='jabber:client'
  						      xmlns:stream='http://etherx.jabber.org/streams'>");
-					state <- Negot
+					proceed <- true;
+					this#change_state Negot
 						
 			| _    -> ()
 
@@ -163,15 +172,24 @@ class service conn_init =
 							   </iq>")
 						else ()
 					else if level1_tp = "set" then
-						if level2_ns = "jabber:iq:auth" then
-							(* TODO:consider usage of <digest>, <resource> *)
-							let username = try (UTF8.encode (snd (List.assoc ("", "username") contents)))
-							 			   with Not_found -> "" (*TODO:not permitted*)in
-							let conn_inst = new conn_info ~o_init:(of_fd output connection) () in
-								client_id <- (username ^ "@" ^ my_name);
-								Hashtbl.add global_info client_id conn_inst;
-								this#send ("<iq type='result' id='" ^ level1_id ^ "' to='" ^ client_id ^ "'/>");
-								proceed <- true;
+						if level2_ns = "jabber:iq:auth" then begin
+							username <- begin try (UTF8.encode (snd (List.assoc ("", "username") contents)))
+							 			with Not_found -> ""
+										end;
+							resource <- begin try (UTF8.encode (snd (List.assoc ("", "resource") contents)))
+										with Not_found -> ""
+										end;
+							let digest = try (UTF8.encode (snd (List.assoc ("", "digest") contents)))
+										 with Not_found -> "" in
+							(*Allow access to any connections, without authentication *)
+							if username <> "" && digest <> "" then
+								let conn_inst = new conn_info ~o_init:(of_fd output connection) () in
+									(*TODO judgement of digest - cryptokit needed *)
+									client_id <- (username ^ "@" ^ my_name);
+									Hashtbl.add global_info client_id conn_inst;
+									this#send ("<iq type='result' id='" ^ level1_id ^ "' to='" ^ client_id ^ "'/>");
+									proceed <- true;
+							end
 						else ()
 					else ()
 				else ();
@@ -191,8 +209,6 @@ class service conn_init =
 		method connect_handler = function
 			| Start_element ((ns, name), att) when xml_parser#level = 1 ->
 				level1 <- ((UTF8.encode ns, UTF8.encode name), att)
-			| Start_element ((ns, name), att) when xml_parser#level = 2 ->
-				level2 <- ((UTF8.encode ns, UTF8.encode name), att)
 			| End_element (ns, name) when xml_parser#level = 1 ->
 				let ((_, _), att) = level1 in
 				let ((level2_ns, _), _) = level2 in
@@ -248,6 +264,7 @@ class service conn_init =
 								(* remove from to global_info *)
 								Hashtbl.remove global_info client_id;
 								counter := !counter - 1;
+								state <- Closed;
 								ignore_result (Lwt_unix.close connection)
 							end
 						(* initial, subsequent presences *)
@@ -262,20 +279,17 @@ class service conn_init =
 									let presence_inst = conn_inst#get_presence in
 									if subs = "both" then begin
 										this#send_to id ("<presence xmlns='jabber:client' to='" ^ id ^ "' from='"                               				  ^client_id^"' type='"^level1_tp^"'>"^stanza_temp^"</presence>");
-										if level1_tp <> "unavailable" then this#send ("<presence xmlns='jabber:client' from='"^id^"'>"^presence_inst^"</presence>");
+										this#send ("<presence xmlns='jabber:client' from='"^id^"'>"^presence_inst^"</presence>");
 										end
+									(* only send presence to the contact *)
 									else if subs = "from" then
 										this#send_to id ("<presence xmlns='jabber:client' to='" ^ id ^ "' from='"                               				  ^client_id^"' type='"^level1_tp^"'>"^stanza_temp^"</presence>")
+									(* only get presence info of the contact *)
 									else if subs = "to" then
-										if level1_tp <> "unavailable" then this#send ("<presence xmlns='jabber:client' from='"^id^"'>"^presence_inst^"</presence>");
+										this#send ("<presence xmlns='jabber:client' from='"^id^"'>"^presence_inst^"</presence>");
 									with Not_found -> ()
 								in
 								List.iter broadcast contacts;
-								(* send to temporary contacts *)
-								if level1_tp = "unavailable" then begin 
-									List.iter broadcast contacts_temp;
-									contacts_temp <- []
-									end;
 								(* update to global_info *)
 								let conn_inst = Hashtbl.find global_info client_id in
 									conn_inst#change_presence stanza_temp;
@@ -291,50 +305,69 @@ class service conn_init =
 					(****** MESSAGES ******)
 					else if name = UTF8.decode "message" then
 						if level1_tp = "chat" then begin
-							try begin this#send_to level1_to ("<message from='"^client_id^"' id='"^level1_id ^ 
-														"' to='"^level1_to^"' type='chat' xml:lang='"^level1_la ^
-														"'>" ^ stanza_temp  ^ "</message>");
+							try begin this#send_to level1_to ("<message from='"^client_id^"' id='"^level1_id^"' to='"^level1_to^"' type='chat' xml:lang='"^level1_la^"'>" ^ stanza_temp  ^ "</message>");
 								contents <- [];
 								stanza_temp <- "";
 								end
 							with Not_found -> (); (*TODO: raise exception *)
 							end
 
+			| Start_element ((ns, name), att) when xml_parser#level = 2 ->
+				level2 <- ((UTF8.encode ns, UTF8.encode name), att);
+				let ((_, level2_name), level2_att) = level2 in
+				let level2_la = try (UTF8.encode (List.assoc xml_lang level2_att)) with Not_found -> "" in
+				let ((_, level1_name), _) = level1 in
+				if level1_name = "presence" then
+					stanza_temp <- (stanza_temp ^ xml_parser#raw_string)
+				else if level1_name = "message" then
+					(* support multiple <body> stanza with distinct xml:lang *)
+					if (List.mem_assoc (level2_la, level2_name) contents) then 
+						() (*TODO: raise conflict exception *)
+					else 
+						stanza_temp <- (stanza_temp ^ xml_parser#raw_string)
+				
 			| End_element (ns, name) when xml_parser#level = 2 ->
 				let ((_, level1_name), _) = level1 in
 				let ((_, level2_name), level2_att) = level2 in
 				let level2_la = try (UTF8.encode (List.assoc xml_lang level2_att)) with Not_found -> "" in
-				if level1_name = "presence" then 
-					stanza_temp <- (stanza_temp ^ xml_parser#raw_string)
+				if level1_name = "presence" then
+					if has_data then 
+						stanza_temp <- (stanza_temp ^ xml_parser#raw_string)
+					else ()
 				else if level1_name = "message" then
 					(* support multiple <body> stanza with distinct xml:lang *)
 					if (List.mem_assoc (level2_la, level2_name) contents) then 
 						() (*TODO: raise conflict exception *)
 					else begin
 						contents <- ((level2_la, level2_name), ([], [])) :: contents;
-						stanza_temp <- (stanza_temp ^ xml_parser#raw_string)
-						end
-			| CharData s when xml_parser#level = 2 -> 
+						if has_data then stanza_temp <- (stanza_temp ^ xml_parser#raw_string)
+						end;
+				has_data <- false
+
+			| CharData s when xml_parser#level = 3 -> 
 				let ((_, level1_name), _) = level1 in
-				if level1_name = "presence" then chardata <- s
+				if level1_name = "presence" || level1_name = "message" then 
+					begin
+					chardata <- s;
+					has_data <- true
+					end
 			| _ -> ()
 		
 		(* TODO: Dont change handler every time parse *)
 		method stream_handler str = 
 			try 
 				match state with
-				| Closed -> xml_parser#change_event_handler this#init_handler;
-							xml_parser#parse str;
-				| Start -> 	xml_parser#change_event_handler this#start_handler;
-							xml_parser#parse str;
-				| Negot ->	xml_parser#change_event_handler this#negot_handler;
-							xml_parser#parse str;
-				| Connected ->	xml_parser#change_event_handler this#connect_handler;
-							xml_parser#parse str;
+				| Closed
+				| Start
+				| Negot
+				| Connected -> xml_parser#parse str
 			with XML.Malformed_XML err_str 
 				|XML.Invalid_XML err_str
 				|XML.Restricted_XML err_str -> this#send_err err_str
 				|XML.Unsupported_encoding -> this#send_err "Error: Unsupport encoding."
+
+		method initialize =
+			xml_parser#change_event_handler this#init_handler
 
 	end;;
 
@@ -347,12 +380,13 @@ let rec dispatcher () =
 	listen skt 4;
 	printl "server thread established" >>= fun () -> 
 	accept skt >>= fun (con, caller_addr) -> 
-	let conn_handler = 
+	let conn_thread = 
 		let temp_str = ref "" in
 		printlf "client thread %d established" !counter >>= fun () -> 
 		let inchan = of_fd input con in
 		let stream = Lwt_io.read_chars inchan in
 		let service_inst = new service con in
+			service_inst#initialize;
 		let char_handler c =  
             temp_str := !temp_str ^ (String.make 1 c);
             if c = '>' then begin
@@ -366,6 +400,6 @@ let rec dispatcher () =
 		counter := !counter + 1;
 		printlf "Client number %d" !counter >>= fun () ->
 		printlf "Hashtable size %d" (Hashtbl.length global_info) >>= fun () ->
-		join [conn_handler; dispatcher ()]
+		join [conn_thread; dispatcher ()]
 
 let () = Lwt_main.run (dispatcher ())

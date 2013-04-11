@@ -132,12 +132,14 @@ class handler init_ic init_oc =
 		method connect_handler = function
 			| End_element (ns, name) when xml_parser#level = 1 -> 
 				if name = UTF8.decode "message" then
-					counter := !counter + 1;
-					if !counter = 1000 then
-						let current_time = Sys.time () in
-						let file = Unix.openfile "output" [O_WRONLY; O_APPEND; O_CREAT] 0o666 in
-						let out_str = string_of_float (current_time -. !start_time) in
-						let n = Unix.single_write file out_str 0 (String.length out_str) in ()
+					this#send ("<message
+                    from='"^jid^"'
+                    id='b4vs9'
+                    to='test1@ubuntu'
+                    type='chat'
+                    xml:lang='en'>
+                <body>hello?</body>
+                </message>")
 			| _ -> ()
 					
 
@@ -196,16 +198,14 @@ let client_thread =
 				done
 			else if input = "test latency" then begin
 				start_time := Sys.time ();
-				for i = 0 to 1000 do
-					ignore_result (write_line oc ("<message
+				ignore_result (write_line oc ("<message
     from='"^jid^"'
     id='b4vs9'
-    to='nevergone@ubuntu'
+    to='test0@ubuntu'
     type='chat'
     xml:lang='en'>
 <body>hello?</body>
 </message>"))
-				done
 			end;
 			join [test_thread ()]
 		in

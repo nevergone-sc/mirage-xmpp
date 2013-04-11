@@ -8,7 +8,7 @@ open Cryptokit
 type state = Closed | Start | Negot | Connected
 
 let password = "123";;
-let un = "test0";;
+let un = "test1";;
 let sn = "ubuntu";;
 let jid = un ^ "@" ^ sn;;
 let rs = "laptop";;
@@ -133,11 +133,21 @@ class handler init_ic init_oc =
 			| End_element (ns, name) when xml_parser#level = 1 -> 
 				if name = UTF8.decode "message" then
 					counter := !counter + 1;
-					if !counter = 1000 then
+					if !counter = 1000 || !counter = 5000 || !counter = 10000 then
 						let current_time = Sys.time () in
 						let file = Unix.openfile "output" [O_WRONLY; O_APPEND; O_CREAT] 0o666 in
-						let out_str = string_of_float (current_time -. !start_time) in
+						let out_str = ((string_of_float (current_time -. !start_time))^"\n") in
 						let n = Unix.single_write file out_str 0 (String.length out_str) in ()
+					else 
+						print_string (string_of_int !counter);
+						this#send ("<message
+					    from='"^jid^"'
+					    id='b4vs9'
+					    to='test0@ubuntu'
+					    type='chat'
+					    xml:lang='en'>
+						<body>hello?</body>
+						</message>")
 			| _ -> ()
 					
 
@@ -209,6 +219,6 @@ let client_thread =
 			end;
 			join [test_thread ()]
 		in
-			join [receive_thread (); test_thread ()]
+			join [receive_thread (); send_thread ()]
 
 let () = Lwt_main.run (client_thread)
