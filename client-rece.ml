@@ -8,12 +8,27 @@ open Cryptokit
 type state = Closed | Start | Negot | Connected
 
 let password = "123";;
-let un = "test1";;
+let un = Sys.argv.(3);;
+let un_to = Sys.argv.(4);;
 let sn = "ubuntu";;
 let jid = un ^ "@" ^ sn;;
 let rs = "laptop";;
 let start_time = ref 0.0;;
 let counter = ref 0;;
+
+let message = ref "";;
+let read_file =
+    let file = Unix.openfile "message.txt" [O_RDONLY] 0o640 in
+    let inchan = Unix.in_channel_of_descr file in
+    try
+        while true; do
+            message := !message ^ (input_line inchan)
+        done;
+    with End_of_file ->
+        close_in inchan;;
+(*
+message := "hello";;
+*)
 
 class handler init_ic init_oc =
     object(this)
@@ -46,6 +61,13 @@ class handler init_ic init_oc =
 		method send_err str = 
 			print_string str
 
+		method print_label =
+			let file = Unix.openfile "output" [O_WRONLY; O_APPEND; O_CREAT] 0o666 in
+				match Sys.argv.(2) with
+				| "1111" -> ignore (Unix.single_write file "\nOcaml server\n" 0 14)
+				| "5222" -> ignore (Unix.single_write file "\nEjabberd server\n" 0 17)
+				| _		 -> ()
+			
 		method tags_refresh =
             level1 <- (("",""), []);
             level2 <- (("",""), []);
@@ -131,23 +153,30 @@ class handler init_ic init_oc =
 
 		method connect_handler = function
 			| End_element (ns, name) when xml_parser#level = 1 -> 
-				if name = UTF8.decode "message" then
+				if name = UTF8.decode "message" then begin
 					counter := !counter + 1;
-					if !counter = 1000 || !counter = 5000 || !counter = 10000 then
-						let current_time = Sys.time () in
+					print_string (string_of_int !counter);
+					if !counter < 100 then
+					this#send ("<message
+				    from='"^jid^"'
+				    id='b4vs9'
+				    to='"^un_to^"@ubuntu'
+				    type='chat'
+				    xml:lang='en'>
+					<body>"^ !message^"</body>
+					</message>");
+					if !counter = 1 then begin
+						start_time := Unix.gettimeofday ();
+						this#print_label
+						end
+					else if !counter = 100 || !counter = 500 || !counter = 1000 || !counter = 5000 then
+						let current_time = Unix.gettimeofday () in
 						let file = Unix.openfile "output" [O_WRONLY; O_APPEND; O_CREAT] 0o666 in
 						let out_str = ((string_of_float (current_time -. !start_time))^"\n") in
-						let n = Unix.single_write file out_str 0 (String.length out_str) in ()
-					else 
-						print_string (string_of_int !counter);
-						this#send ("<message
-					    from='"^jid^"'
-					    id='b4vs9'
-					    to='test0@ubuntu'
-					    type='chat'
-					    xml:lang='en'>
-						<body>hello?</body>
-						</message>")
+						let num_str = ((string_of_int !counter) ^ ": ") in
+							ignore (Unix.single_write file num_str 0 (String.length num_str));
+							ignore (Unix.single_write file out_str 0 (String.length out_str))
+					end
 			| _ -> ()
 					
 

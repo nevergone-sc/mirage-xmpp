@@ -8,12 +8,27 @@ open Cryptokit
 type state = Closed | Start | Negot | Connected
 
 let password = "123";;
-let un = "test0";;
+let un = Sys.argv.(3);;
+let un_to = Sys.argv.(4);;
 let sn = "ubuntu";;
 let jid = un ^ "@" ^ sn;;
 let rs = "laptop";;
 let start_time = ref 0.0;;
 let counter = ref 0;;
+
+let message = ref "";;
+let read_file =
+    let file = Unix.openfile "message.txt" [O_RDONLY] 0o640 in
+    let inchan = Unix.in_channel_of_descr file in
+    try
+        while true; do
+            message := !message ^ (input_line inchan)
+        done;
+    with End_of_file ->
+        close_in inchan;;
+(*
+message := "hello";;
+*)
 
 class handler init_ic init_oc =
     object(this)
@@ -106,6 +121,15 @@ class handler init_ic init_oc =
 							end
                         else if level2 = (("", ""), []) && level3 = (("", ""), []) then begin
 							state <- Connected;
+							this#send ("<message
+										from='"^jid^"'
+										id='b4vs9'
+										to='"^un_to^"@ubuntu'
+										type='chat'
+										xml:lang='en'>
+										<body>"^ !message^"</body>
+										</message>");
+
 							(*roster query, not important*)
 							this#send "<iq xmlns='jabber:client' type='get' id='aad1a'><query xmlns='jabber:iq:roster'/></iq>";
 							this#send "<presence xmlns='jabber:client'><priority>5</priority><c xmlns='http://jabber.org/protocol/caps' node='http://psi-dev.googlecode.com/caps' ver='0.15' ext='ep-notify-2 html sxe whiteboard'/></presence>"
@@ -135,10 +159,10 @@ class handler init_ic init_oc =
 					this#send ("<message
                     from='"^jid^"'
                     id='b4vs9'
-                    to='test1@ubuntu'
+                    to='"^un_to^"@ubuntu'
                     type='chat'
                     xml:lang='en'>
-                <body>hello?</body>
+                <body>"^ !message^"</body>
                 </message>")
 			| _ -> ()
 					
@@ -197,14 +221,13 @@ let client_thread =
     	            ignore_result (write_line oc ("<iq to='ubuntu' type='set' id='reg"^(string_of_int i)^"' xmlns='jabber:client'> <query xmlns='jabber:iq:register'> <username>test"^(string_of_int i)^"</username> <password>123</password> </query> </iq>"))
 				done
 			else if input = "test latency" then begin
-				start_time := Sys.time ();
 				ignore_result (write_line oc ("<message
     from='"^jid^"'
     id='b4vs9'
-    to='test0@ubuntu'
+    to='test1@ubuntu'
     type='chat'
     xml:lang='en'>
-<body>hello?</body>
+<body>"^ !message^"</body>
 </message>"))
 			end;
 			join [test_thread ()]
