@@ -3,6 +3,7 @@ open Lwt_io (* provides printl *)
 open Lwt_unix (* provides socket, accept, listen... *)
 open XML
 open Unicode
+open Cryptokit
 open Rosterreader
 
 type state = Closed | Start | Negot | Connected
@@ -40,7 +41,9 @@ class service conn_init =
 		val mutable connection = conn_init
 		val mutable client_id = ""
 		val mutable server_lang = None
-		val mutable server_xmpp_version = "1.0"
+		val mutable server_xmpp_version = "0.9"
+		val requirements = ["username"; "digest"] (* requirements for authtication *)
+		val mutable server_req = [] (* requirements that haven't be fulfilled *)
 		val mutable stream_id = ""
 		val mutable username = ""
 		val mutable password = ""
@@ -105,6 +108,7 @@ class service conn_init =
 				proceed <- false;
 				this#tags_refresh;
 				state <- s;
+				server_req <- requirements;
 				match s with
 				| Closed -> xml_parser#change_event_handler this#init_handler
 				| Start -> xml_parser#change_event_handler this#start_handler
@@ -135,7 +139,7 @@ class service conn_init =
 					this#send ("<stream:stream
  						      from='" ^ my_name ^ "'
 							  id='" ^ stream_id ^ "'
- 						      versiervon='" ^ server_xmpp_version ^ "'
+ 						      version='" ^ server_xmpp_version ^ "'
  						      xml:lang='en'
  						      xmlns='jabber:client'
  						      xmlns:stream='http://etherx.jabber.org/streams'>");
@@ -168,23 +172,44 @@ class service conn_init =
 							   <username/>
 							   <digest/>
 							   <resource/>
+							   <password/>
 							   </query>
 							   </iq>")
 						else ()
 					else if level1_tp = "set" then
 						if level2_ns = "jabber:iq:auth" then begin
-							username <- begin try (UTF8.encode (snd (List.assoc ("", "username") contents)))
-							 			with Not_found -> ""
-										end;
-							resource <- begin try (UTF8.encode (snd (List.assoc ("", "resource") contents)))
-										with Not_found -> ""
-										end;
-							let digest = try (UTF8.encode (snd (List.assoc ("", "digest") contents)))
-										 with Not_found -> "" in
-							(*Allow access to any connections, without authentication *)
-							if username <> "" && digest <> "" then
+							(* if response query contains "username" then eliminate it from server_req list *)
+							begin try (
+								username   <- UTF8.encode (snd (List.assoc ("", "username") contents));
+								server_req <- snd (List.partition ((=) "username") server_req); 
+							 	) with Not_found -> ();
+							end;
+							(* "password" can be optional - replaced by digest *)
+							begin try (
+								password   <-UTF8.encode (snd (List.assoc ("", "password") contents));
+								server_req <- snd (List.partition ((=) "password") server_req);
+								) with Not_found -> ();
+							end;
+							(* "resource" can be optional *)
+							resource <- begin try (UTF8.encode (snd (List.assoc ("", "resource") contents));
+										) with Not_found -> ""
+							end;
+							(* if "digest" is appropriate then eliminate it from server_req list *)
+							begin try (
+								let digest = UTF8.encode (snd (List.assoc ("", "digest") contents)) in
+									(* utilities for encryption 
+									let sha1 = Hash.sha1 () in
+                    				let hex = Hexa.encode () in
+                    				let str = transform_string hex (hash_string sha1 (stream_id ^ password)) in
+									*)
+									(* no password needed, allow all digest except empty *)
+									if digest <> "" then
+										server_req <- snd (List.partition ((=) "digest") server_req);
+							) with Not_found -> ()
+							end;
+							(* if all requires are met (server_req is empty) then proceed *)
+							if server_req = [] then
 								let conn_inst = new conn_info ~o_init:(of_fd output connection) () in
-									(*TODO judgement of digest - cryptokit needed *)
 									client_id <- (username ^ "@" ^ my_name);
 									Hashtbl.add global_info client_id conn_inst;
 									this#send ("<iq type='result' id='" ^ level1_id ^ "' to='" ^ client_id ^ "'/>");
@@ -353,7 +378,6 @@ class service conn_init =
 					end
 			| _ -> ()
 		
-		(* TODO: Dont change handler every time parse *)
 		method stream_handler str = 
 			try 
 				match state with
@@ -366,9 +390,10 @@ class service conn_init =
 				|XML.Restricted_XML err_str -> this#send_err err_str
 				|XML.Unsupported_encoding -> this#send_err "Error: Unsupport encoding."
 
-		method initialize =
-			xml_parser#change_event_handler this#init_handler
-
+		initializer
+			xml_parser#change_event_handler this#init_handler;
+			server_req <- requirements
+			
 	end;;
 
 
@@ -386,7 +411,6 @@ let rec dispatcher () =
 		let inchan = of_fd input con in
 		let stream = Lwt_io.read_chars inchan in
 		let service_inst = new service con in
-			service_inst#initialize;
 		let char_handler c =  
             temp_str := !temp_str ^ (String.make 1 c);
             if c = '>' then begin

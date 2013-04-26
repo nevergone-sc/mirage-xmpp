@@ -121,6 +121,8 @@ class handler init_ic init_oc =
 					stanza_temp <- stanza_temp^"<username>"^username^"</username>\n"
 				else if name_str = "resource" then
 					stanza_temp <- stanza_temp^"<resource>"^resource^"</resource>\n"
+				else if name_str = "password" then
+					stanza_temp <- stanza_temp^"<password>"^password^"</password>\n"
 				else if name_str = "digest" then begin
 					let sha1 = Hash.sha1 () in
 					let hex = Hexa.encode () in
@@ -209,6 +211,6 @@ let client_thread =
 			end;
 			join [test_thread ()]
 		in
-			join [receive_thread (); test_thread ()]
+			join [receive_thread (); send_thread ()]
 
 let () = Lwt_main.run (client_thread)
