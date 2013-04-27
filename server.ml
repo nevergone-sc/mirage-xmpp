@@ -59,6 +59,7 @@ class service conn_init =
 		val mutable chardata = []
 		val mutable contents = [] (* list of ((namespace, name),(attribute list, data)) *)
 		val mutable stanza_temp = ""
+		val mutable stanza_start = ""
 		(* val mutable stanza_send = []     used for packed stanza sending mechanism *)
 		val xml_parser = new event_parser
 
@@ -172,7 +173,6 @@ class service conn_init =
 							   <username/>
 							   <digest/>
 							   <resource/>
-							   <password/>
 							   </query>
 							   </iq>")
 						else ()
@@ -251,7 +251,9 @@ class service conn_init =
 										end;
 							let str_iq = ref ("<iq to='"^client_id^"' type='result' id='"^level1_id^"'>
 												<query xmlns='jabber:iq:roster'>") in
+							(* extract information from contact and pack into a XML element *)
 	      		 			let list_iter (jid, name, subs, groups) =
+								(* pack groups into a XML element *)
 		                    	let rec str_groups = function
 		                        	| []   -> ""
 		                        	| g :: gs -> ("<group>" ^ g ^ "</group>" ^ (str_groups gs))
@@ -343,39 +345,41 @@ class service conn_init =
 				let level2_la = try (UTF8.encode (List.assoc xml_lang level2_att)) with Not_found -> "" in
 				let ((_, level1_name), _) = level1 in
 				if level1_name = "presence" then
-					stanza_temp <- (stanza_temp ^ xml_parser#raw_string)
+					stanza_start <- xml_parser#raw_string
 				else if level1_name = "message" then
 					(* support multiple <body> stanza with distinct xml:lang *)
 					if (List.mem_assoc (level2_la, level2_name) contents) then 
 						() (*TODO: raise conflict exception *)
 					else 
-						stanza_temp <- (stanza_temp ^ xml_parser#raw_string)
+						stanza_start <- xml_parser#raw_string
 				
 			| End_element (ns, name) when xml_parser#level = 2 ->
 				let ((_, level1_name), _) = level1 in
 				let ((_, level2_name), level2_att) = level2 in
 				let level2_la = try (UTF8.encode (List.assoc xml_lang level2_att)) with Not_found -> "" in
 				if level1_name = "presence" then
-					if has_data then 
-						stanza_temp <- (stanza_temp ^ xml_parser#raw_string)
-					else ()
+					let stanza_end = xml_parser#raw_string in
+					if stanza_start = stanza_end then 
+						stanza_temp <- (stanza_temp ^ stanza_end)
+					else
+						stanza_temp <- (stanza_temp ^ stanza_start ^ stanza_end)
 				else if level1_name = "message" then
 					(* support multiple <body> stanza with distinct xml:lang *)
 					if (List.mem_assoc (level2_la, level2_name) contents) then 
 						() (*TODO: raise conflict exception *)
 					else begin
 						contents <- ((level2_la, level2_name), ([], [])) :: contents;
-						if has_data then stanza_temp <- (stanza_temp ^ xml_parser#raw_string)
+						let stanza_end = xml_parser#raw_string in
+						if stanza_start = stanza_end then 
+							stanza_temp <- (stanza_temp ^ stanza_end)
+						else
+							stanza_temp <- (stanza_temp ^ stanza_start ^ stanza_end)
 						end;
-				has_data <- false
 
 			| CharData s when xml_parser#level = 3 -> 
 				let ((_, level1_name), _) = level1 in
 				if level1_name = "presence" || level1_name = "message" then 
-					begin
 					chardata <- s;
-					has_data <- true
-					end
 			| _ -> ()
 		
 		method stream_handler str = 
