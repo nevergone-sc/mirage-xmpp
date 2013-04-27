@@ -15,6 +15,17 @@ let rs = "laptop";;
 let start_time = ref 0.0;;
 let counter = ref 0;;
 
+let message = ref "";;
+let read_file =
+    let file = Unix.openfile "message.txt" [O_RDONLY] 0o640 in
+    let inchan = Unix.in_channel_of_descr file in
+    try
+        while true; do
+            message := !message ^ (input_line inchan)
+        done;
+    with End_of_file ->
+        close_in inchan;;
+
 class handler init_ic init_oc =
     object(this)
 		val xml_lang = (UTF8.decode "http://www.w3.org/XML/1998/namespace", [108; 97; 110; 103])
@@ -52,6 +63,13 @@ class handler init_ic init_oc =
             level3 <- (("",""), []);
             chardata <- [];
             contents <- []
+
+		method print_label =
+            let file = Unix.openfile "output" [O_WRONLY; O_APPEND; O_CREAT] 0o666 in
+                match Sys.argv.(2) with
+                | "1111" -> ignore (Unix.single_write file "\nOcaml server\n" 0 14)
+                | "5222" -> ignore (Unix.single_write file "\nEjabberd server\n" 0 17)
+				| _		 -> ()
 
 		method init_handler = function
             | Start_document -> state <- Start
@@ -93,8 +111,6 @@ class handler init_ic init_oc =
                 let ((_, _), att) = level1 in
                 let ((level2_ns, level2_name), _) = level2 in
                 let level1_tp = try (UTF8.encode (List.assoc ([], UTF8.decode "type") att)) 
-								with Not_found -> ""
-                and level1_id = try (UTF8.encode (List.assoc ([], UTF8.decode "id") att))
                                 with Not_found -> "" (* TODO:should raise exception here*) in
                 if name = UTF8.decode "iq" then
                     if level1_tp = "result" then
@@ -133,13 +149,31 @@ class handler init_ic init_oc =
 
 		method connect_handler = function
 			| End_element (ns, name) when xml_parser#level = 1 -> 
-				if name = UTF8.decode "message" then
+				if name = UTF8.decode "message" then begin
 					counter := !counter + 1;
-					if !counter = 1000 then
-						let current_time = Sys.time () in
-						let file = Unix.openfile "output" [O_WRONLY; O_APPEND; O_CREAT] 0o666 in
-						let out_str = string_of_float (current_time -. !start_time) in
-						let n = Unix.single_write file out_str 0 (String.length out_str) in ()
+                    print_string (string_of_int !counter);
+                    if !counter < 5000 then
+                    this#send ("<message
+                    from='"^jid^"'
+                    id='b4vs9'
+                    to='"^un^"@ubuntu'
+                    type='chat'
+                    xml:lang='en'>
+                    <body>"^ !message^"</body>
+                    </message>");
+                    if !counter = 1 then begin
+                        start_time := Unix.gettimeofday ();
+                        this#print_label
+                        end
+                    else if !counter = 100 || !counter = 500 || !counter = 1000 || !counter = 5000 then
+                        let current_time = Unix.gettimeofday () in
+                        let file = Unix.openfile "output" [O_WRONLY; O_APPEND; O_CREAT] 0o666 in
+                        let out_str = ((string_of_float (current_time -. !start_time))^"\n") in
+                        let num_str = ((string_of_int !counter) ^ ": ") in
+                            ignore (Unix.single_write file num_str 0 (String.length num_str));
+                            ignore (Unix.single_write file out_str 0 (String.length out_str))
+                    end
+
 			| _ -> ()
 					
 
@@ -183,7 +217,7 @@ let client_thread =
 			in
 				Lwt_stream.iter_s char_handler stream
 		in
-		(* thread used for send dynamic information **********************)
+		(* thread used for sending dynamic information *******************)
 		let rec send_thread () =
 			read_line Lwt_io.stdin >>= fun input ->
 			write_line oc input >>= fun () ->
@@ -202,7 +236,7 @@ let client_thread =
 					ignore_result (write_line oc ("<message
     from='"^jid^"'
     id='b4vs9'
-    to='nevergone@ubuntu'
+    to='"^jid^"'
     type='chat'
     xml:lang='en'>
 <body>hello?</body>

@@ -59,7 +59,7 @@ class service conn_init =
 		val mutable chardata = []
 		val mutable contents = [] (* list of ((namespace, name),(attribute list, data)) *)
 		val mutable stanza_temp = ""
-		val mutable stanza_start = ""
+		val mutable element_start = ""
 		(* val mutable stanza_send = []     used for packed stanza sending mechanism *)
 		val xml_parser = new event_parser
 
@@ -212,6 +212,9 @@ class service conn_init =
 								let conn_inst = new conn_info ~o_init:(of_fd output connection) () in
 									client_id <- (username ^ "@" ^ my_name);
 									Hashtbl.add global_info client_id conn_inst;
+									contacts <- begin try !(Hashtbl.find roster client_id)
+												with Not_found -> [] (*TODO: create a new roster entry*)
+												end;	
 									this#send ("<iq type='result' id='" ^ level1_id ^ "' to='" ^ client_id ^ "'/>");
 									proceed <- true;
 							end
@@ -246,9 +249,6 @@ class service conn_init =
 						begin
 						if level1_tp = "get" && level2_ns = "jabber:iq:roster" then
 							begin
-							contacts <- begin try !(Hashtbl.find roster client_id)
-										with Not_found -> [] (*TODO: create a new roster entry*)
-										end;
 							let str_iq = ref ("<iq to='"^client_id^"' type='result' id='"^level1_id^"'>
 												<query xmlns='jabber:iq:roster'>") in
 							(* extract information from contact and pack into a XML element *)
@@ -280,7 +280,7 @@ class service conn_init =
 						else if level1_tp = "unavailable" then begin
 							let broadcast (id, _, subs, _) =
 								(*broadcast to all available contacts*)
-								if (subs = "both" || subs = "from") && (Hashtbl.mem global_info id) then begin
+								if (subs <> "to" ) && (Hashtbl.mem global_info id) then begin
 									this#send_to id ("<presence xmlns='jabber:client' to='" ^ id ^ "' from='"                               				  ^client_id^"' type='"^level1_tp^"'>"^stanza_temp^"</presence>");
 									end
 							in
@@ -345,35 +345,35 @@ class service conn_init =
 				let level2_la = try (UTF8.encode (List.assoc xml_lang level2_att)) with Not_found -> "" in
 				let ((_, level1_name), _) = level1 in
 				if level1_name = "presence" then
-					stanza_start <- xml_parser#raw_string
+					element_start <- xml_parser#raw_string
 				else if level1_name = "message" then
 					(* support multiple <body> stanza with distinct xml:lang *)
 					if (List.mem_assoc (level2_la, level2_name) contents) then 
 						() (*TODO: raise conflict exception *)
 					else 
-						stanza_start <- xml_parser#raw_string
+						element_start <- xml_parser#raw_string
 				
 			| End_element (ns, name) when xml_parser#level = 2 ->
 				let ((_, level1_name), _) = level1 in
 				let ((_, level2_name), level2_att) = level2 in
 				let level2_la = try (UTF8.encode (List.assoc xml_lang level2_att)) with Not_found -> "" in
 				if level1_name = "presence" then
-					let stanza_end = xml_parser#raw_string in
-					if stanza_start = stanza_end then 
-						stanza_temp <- (stanza_temp ^ stanza_end)
+					let element_end = xml_parser#raw_string in
+					if element_start = element_end then 
+						stanza_temp <- (stanza_temp ^ element_end)
 					else
-						stanza_temp <- (stanza_temp ^ stanza_start ^ stanza_end)
+						stanza_temp <- (stanza_temp ^ element_start ^ element_end)
 				else if level1_name = "message" then
 					(* support multiple <body> stanza with distinct xml:lang *)
 					if (List.mem_assoc (level2_la, level2_name) contents) then 
 						() (*TODO: raise conflict exception *)
 					else begin
 						contents <- ((level2_la, level2_name), ([], [])) :: contents;
-						let stanza_end = xml_parser#raw_string in
-						if stanza_start = stanza_end then 
-							stanza_temp <- (stanza_temp ^ stanza_end)
+						let element_end = xml_parser#raw_string in
+						if element_start = element_end then 
+							stanza_temp <- (stanza_temp ^ element_end)
 						else
-							stanza_temp <- (stanza_temp ^ stanza_start ^ stanza_end)
+							stanza_temp <- (stanza_temp ^ element_start ^ element_end)
 						end;
 
 			| CharData s when xml_parser#level = 3 -> 
@@ -396,8 +396,8 @@ class service conn_init =
 
 		initializer
 			xml_parser#change_event_handler this#init_handler;
-			server_req <- requirements
-			
+			server_req <- requirements;
+
 	end;;
 
 
