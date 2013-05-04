@@ -1,5 +1,5 @@
 open Lwt (* provides bind and join *)
-open Lwt_io (* provides printl *)
+open Lwt_io (* provides printl... *)
 open Lwt_unix (* provides socket, accept, listen... *)
 open XML
 open Unicode
@@ -7,6 +7,9 @@ open Cryptokit
 open Rosterreader
 
 type state = Closed | Start | Negot | Connected
+exception Invalid_from of string;;
+exception Invalid_namespace of string;;
+exception Unsupported_version of string;;
 (* TODO:Define some service exceptions here!!!!!!!*)
 
 
@@ -39,9 +42,11 @@ class service conn_init =
 		val xml_lang = (UTF8.decode "http://www.w3.org/XML/1998/namespace", [108; 97; 110; 103])
 		val server_id = my_name
 		val mutable connection = conn_init
+		val mutable outchannel = of_fd output conn_init
 		val mutable client_id = ""
 		val mutable server_lang = None
-		val mutable server_xmpp_version = "0.9"
+		val server_xmpp_version = "0.9"
+		val mutable client_xmpp_version = ""
 		val requirements = ["username"; "digest"] (* requirements for authtication *)
 		val mutable server_req = [] (* requirements that haven't be fulfilled *)
 		val mutable stream_id = ""
@@ -69,24 +74,41 @@ class service conn_init =
 		method gen_id = string_of_int !counter
 
 		method send str = 
-			let outchan = of_fd output connection in
-			ignore_result (write_line outchan str)
+			ignore_result (write_line outchannel str);
 
 		method send_all strs = 
 			List.iter this#send strs
 
 (* TODO: have different responses *) 
-		method send_err str =  
+		method send_err exc =  
 			ignore_result (
-			printl str >>= fun () ->
-			this#send "<stream:error>
-						<host-unknown xmlns='urn:ietf:params:xml:ns:xmpp-streams'/>
+			let err_namespace_str = " xmlns='urn:ietf:params:xml:ns:xmpp-streams'" in
+			let err_xml_str = 
+				match exc with
+				 XML.Malformed_XML err_str  -> print_string err_str;
+											   "not-well-formed" 
+				|XML.Invalid_XML err_str    -> print_string err_str;
+											   "invalid-xml"
+				|XML.Restricted_XML err_str -> print_string err_str;
+											   "restricted-xml"
+				|XML.Unsupported_encoding   -> "unsupported-encoding"
+				|Invalid_from err_str		-> print_string err_str;
+											   "invalid-from"
+				|Invalid_namespace err_str	-> print_string err_str;
+											   "invalid-namespace"
+				|Unsupported_version err_str-> print_string err_str;
+											   "unspported-version"
+				|_ 							-> ""
+			in
+			this#send ("<stream:error>
+						<" ^ err_xml_str ^ err_namespace_str ^ "/>
 						</stream:error>
-						</stream:stream>";
+						</stream:stream>");
+			xml_parser#change_event_handler this#closing_handler;
+			(* wait for 5 seconds *)
 			sleep 5.0 >>= fun () ->
-			counter := !counter - 1;
-			Hashtbl.remove global_info client_id; 
-			Lwt_unix.close connection
+			this#close_conn;
+			return ()
 			)
 			
 
@@ -94,14 +116,24 @@ class service conn_init =
 			try
 			let outchan_to = (Hashtbl.find global_info id)#get_outchan in
 				ignore_result (write_line outchan_to str)
-			with Not_found -> () (*TODO: implementation*)
+			with Not_found -> () (*target client not online, ignore *)
+
 		
+		method close_conn =
+			if state <> Closed then begin
+				counter := !counter - 1;
+				Hashtbl.remove global_info client_id; 
+				ignore_result (Lwt_io.close outchannel)
+				end
+
+
 		method tags_refresh =
 			level1 <- (("",""), []);
 			level2 <- (("",""), []);
 			level3 <- (("",""), []);
 			chardata <- [];
 			contents <- []
+
 
 		method change_state s = 
 			if proceed then
@@ -117,11 +149,21 @@ class service conn_init =
 				| Connected -> xml_parser#change_event_handler this#connect_handler
 				end
 
-(* TODO: add error handling in each handler!!!!! *)
+		(* available services when server-client connection is about to close *)
+		method closing_handler = function
+			| End_element (ns, name) when xml_parser#level = 0 -> 
+				(* when comes the stream end tag </stream> *)
+				this#close_conn;
+				state <- Closed
+				
+			| _ -> () (* TODO: other available services, like change roster, etc *)
+
+
 		method init_handler = function 
 			| Start_document -> proceed <- true;
 								this#change_state Start
 			| _				 -> ()
+
 
 		method start_handler = function
 			| Start_element ((ns, name), att)  -> 
@@ -130,12 +172,13 @@ class service conn_init =
                         Some (UTF8.encode (List.assoc xml_lang att))
                     with Not_found -> None
                     end;
-                server_xmpp_version <- "0.9"; 
-				client_id <- begin try
-                		UTF8.encode (List.assoc ([], [102; 114; 111; 109]) att)
-					with Not_found -> ""
-					end;
-(* TODO: add conditions here!!!!!!*)
+                client_xmpp_version <- begin try 
+                        (UTF8.encode (List.assoc ([], UTF8.decode "version") att))
+                    with Not_found -> ""
+                    end;
+				if client_xmpp_version <> "0.9" then
+					this#send_err (Unsupported_version ("version: " ^ client_xmpp_version))
+				else begin
 					this#send "<?xml version=\"1.0\"?>";
 					this#send ("<stream:stream
  						      from='" ^ my_name ^ "'
@@ -146,6 +189,7 @@ class service conn_init =
  						      xmlns:stream='http://etherx.jabber.org/streams'>");
 					proceed <- true;
 					this#change_state Negot
+				end
 						
 			| _    -> ()
 
@@ -210,7 +254,7 @@ class service conn_init =
 							(* if all requires are met (server_req is empty) then proceed *)
 							if server_req = [] then
 								let conn_inst = new conn_info ~o_init:(of_fd output connection) () in
-									client_id <- (username ^ "@" ^ my_name);
+									client_id <- (username ^ "@" ^ my_name ^ "/"  ^ resource);
 									Hashtbl.add global_info client_id conn_inst;
 									contacts <- begin try !(Hashtbl.find roster client_id)
 												with Not_found -> [] (*TODO: create a new roster entry*)
@@ -236,7 +280,12 @@ class service conn_init =
 
 		method connect_handler = function
 			| Start_element ((ns, name), att) when xml_parser#level = 1 ->
-				level1 <- ((UTF8.encode ns, UTF8.encode name), att)
+				level1 <- ((UTF8.encode ns, UTF8.encode name), att);
+				let level1_from = try (UTF8.encode (List.assoc ([], UTF8.decode "from") att)) 
+								  with Not_found -> "" in
+				if level1_from <> "" && level1_from <> client_id then
+					this#send_err (Invalid_from ("Invalid from: "^level1_from))
+				
 			| End_element (ns, name) when xml_parser#level = 1 ->
 				let ((_, _), att) = level1 in
 				let ((level2_ns, _), _) = level2 in
@@ -389,10 +438,7 @@ class service conn_init =
 				| Start
 				| Negot
 				| Connected -> xml_parser#parse str
-			with XML.Malformed_XML err_str 
-				|XML.Invalid_XML err_str
-				|XML.Restricted_XML err_str -> this#send_err err_str
-				|XML.Unsupported_encoding -> this#send_err "Error: Unsupport encoding."
+			with x -> this#send_err x 
 
 		initializer
 			xml_parser#change_event_handler this#init_handler;
@@ -401,7 +447,7 @@ class service conn_init =
 	end;;
 
 
-
+(* server main framework *)
 let skt = socket PF_INET SOCK_STREAM 0;;
 let port = int_of_string Sys.argv.(1) in
 	bind skt (ADDR_INET (my_addr, port));;
